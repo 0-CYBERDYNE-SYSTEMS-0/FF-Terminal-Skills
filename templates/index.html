@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Skills Development Pipeline</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AI Skills Development Pipeline</h1>
+            <p class="subtitle">Generate advanced AI agent skills through iterative refinement</p>
+        </header>
+
+        <main>
+            <!-- Query Input Section -->
+            <section class="query-section">
+                <h2>Enter Your Query</h2>
+                <textarea id="queryInput" placeholder="e.g., Research quantum computing optimization techniques..."></textarea>
+                <div class="button-group">
+                    <button id="startBtn" class="btn btn-primary">Start Pipeline</button>
+                    <button id="iterateBtn" class="btn btn-secondary" disabled>Iterate</button>
+                </div>
+            </section>
+
+            <!-- Status Indicator -->
+            <section class="status-section">
+                <div id="status" class="status">
+                    <span class="status-indicator"></span>
+                    <span class="status-text">Ready</span>
+                </div>
+            </section>
+
+            <!-- Results Section -->
+            <section class="results-section" style="display: none;">
+                <h2>Results</h2>
+                <div class="results-meta">
+                    <span>Iteration: <strong id="iterationCount">0</strong></span>
+                    <span>Timestamp: <strong id="timestamp">-</strong></span>
+                    <span class="web-search-status" id="webSearchStatus" style="display: none;">
+                        <span class="search-indicator">🔍</span>
+                        Web Search: <strong id="webSearchProvider">-</strong>
+                    </span>
+                </div>
+
+                <div class="tabs">
+                    <button class="tab-btn active" data-tab="research">Research</button>
+                    <button class="tab-btn" data-tab="analysis">Analysis</button>
+                    <button class="tab-btn" data-tab="template">Template</button>
+                </div>
+
+                <div class="tab-content">
+                    <div id="research-tab" class="tab-pane active">
+                        <div class="output-container">
+                            <pre id="researchOutput" class="output-text"></pre>
+                            <button class="copy-btn" data-target="researchOutput">Copy</button>
+                        </div>
+                    </div>
+
+                    <div id="analysis-tab" class="tab-pane">
+                        <div class="output-container">
+                            <pre id="analysisOutput" class="output-text"></pre>
+                            <button class="copy-btn" data-target="analysisOutput">Copy</button>
+                        </div>
+                    </div>
+
+                    <div id="template-tab" class="tab-pane">
+                        <div class="output-container">
+                            <pre id="templateOutput" class="output-text"></pre>
+                            <div class="template-actions">
+                                <button id="previewBtn" class="btn btn-outline">Preview & Edit</button>
+                                <button id="exportBtn" class="btn btn-outline">Export</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Templates List Section -->
+            <section class="templates-section">
+                <h2>Generated Templates</h2>
+                <button id="refreshBtn" class="btn btn-small">Refresh</button>
+                <div id="templatesList" class="templates-list">
+                    <p class="no-templates">No templates generated yet</p>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Loading Modal -->
+    <div id="loadingModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="spinner"></div>
+            <p id="loadingText">Processing...</p>
+        </div>
+    </div>
+
+    <!-- Error Modal -->
+    <div id="errorModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <h3>Error</h3>
+            <p id="errorMessage"></p>
+            <button class="btn btn-primary" onclick="closeErrorModal()">OK</button>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
