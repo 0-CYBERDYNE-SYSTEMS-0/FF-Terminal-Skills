@@ -4,165 +4,187 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is an AI Skills Development Pipeline System that generates advanced Anthropic-style agent skills through iterative refinement. The system runs a 3-stage pipeline:
-
-1. **Domain Research** - Uses Perplexity's Llama 3.1 Sonar model for comprehensive research
-2. **Deep Analysis** - Uses DeepSeek Coder V2 to analyze and identify improvements
-3. **Template Generation** - Creates structured skill templates with YAML metadata
+This is an AI Skills Development Pipeline System that generates advanced AI agent skills through iterative refinement. The system combines multiple AI models via OpenRouter to research, analyze, and create structured skill templates with YAML metadata. A Flask web UI enables users to run pipelines, preview results, edit templates, and export outputs.
 
 ## Development Commands
 
-### Setup with UV
+### Setup
 ```bash
-# Install and create virtual environment
+# Install dependencies using UV
 uv sync
 
-# Or explicitly
-uv venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-uv pip install -e .
+# Activate virtual environment (optional)
+source .venv/bin/activate  # macOS/Linux
+# .venv\Scripts\activate    # Windows
 
-# Set up environment variables
+# Configure environment
 cp .env.example .env
-# Edit .env with your OpenRouter API key
+# Edit .env and set OPENROUTER_API_KEY
 ```
 
-### Running the Application
+### Running
 ```bash
-# Development server
+# Development server (includes Flask hot-reload)
 uv run app.py
 
-# Or with Flask
-uv run flask run --debug
+# Server runs on http://localhost:5001
 ```
 
-### Testing
+### Testing & Code Quality
 ```bash
 # Run all tests
 uv run pytest tests/
 
-# Run specific test file
+# Run specific test file or test function
 uv run pytest tests/test_pipeline.py
+uv run pytest tests/test_pipeline.py::TestAIPipeline::test_call_model
 
-# Run with coverage
-uv run pytest --cov=. tests/
-
-# Install test dependencies
-uv sync --group test
-```
-
-### Development Tools
-```bash
 # Format code
 uv run black .
 uv run isort .
 
-# Lint code
+# Lint and type checking
 uv run flake8 .
-
-# Type checking
 uv run mypy .
-
-# Install dev dependencies
-uv sync --group dev
 ```
 
 ## Architecture
 
-### Core Components
+### Core Pipeline Design
 
-1. **Flask App (`app.py`)**
-   - Web server and API endpoints
-   - Session management for pipeline state
-   - RESTful API for pipeline operations
+The system executes a 3-stage pipeline for each query:
 
-2. **Pipeline Module (`pipeline.py`)**
-   - `AIPipeline` class manages the 3-stage process
-   - `PipelineState` class tracks iteration state
-   - OpenRouter API integration
+1. **Research Stage** (`run_research()`)
+   - Model: Grok-4.1-fast (currently configured)
+   - Queries web search for domain information
+   - Produces comprehensive background context
 
-3. **Configuration (`config.py`)**
-   - Environment variable handling with python-dotenv
-   - Model configuration and parameters
-   - Centralized settings management
+2. **Analysis Stage** (`run_analysis()`)
+   - Model: DeepSeek V3.2
+   - Critically evaluates research findings
+   - Identifies improvements and gaps
+   - May generate instructions for further research
 
-4. **Utilities**
-   - `utils/file_manager.py` - Template storage and retrieval
-   - `utils/export.py` - Zip export functionality
+3. **Template Generation Stage** (`run_template_generation()`)
+   - Model: DeepSeek V3.2
+   - Creates YAML-structured skill template
+   - Includes metadata, instructions, and examples
+
+Iterations repeat steps 1-3 if the analysis generates new instructions (up to MAX_ITERATIONS=3).
+
+### Component Interactions
+
+**Pipeline Flow:**
+- User submits query via web UI (`app.py` → `/api/pipeline/start`)
+- `AIPipeline.run()` executes the 3-stage pipeline
+- Results stored in `skills_output/{TIMESTAMP}/`
+- Web UI fetches updates via `/api/logs` (streaming logs)
+- Users can preview, edit, and export results
+
+**Web Search Integration:**
+- `WebSearchManager` provides unified search interface across multiple providers
+- Provider priority: Tavily → Perplexity → OpenRouter → Direct scraping
+- Results cached for 1 hour to reduce API calls
+- Configured via `WEB_SEARCH_PROVIDER` and related API keys
+
+**Logging System:**
+- `PipelineLogger` maintains per-session logs for real-time UI updates
+- Logs include stage, level (debug/info/success/warning/error), and metadata
+- Used by web UI's console.js to stream live pipeline progress
+
+**File Management:**
+- `EnhancedFileManager` handles organized storage under `skills_output/`
+- Each run creates timestamped directory with iteration subdirectories
+- Stores: research.md, analysis.md, template.md, instruction.txt, metadata.json
+- Tracks pipeline state for resuming interrupted iterations
+
+### Key Classes
+
+- `PipelineState` - Tracks query, timestamp, iteration count, and outputs
+- `AIPipeline` - Main orchestrator; calls models, manages state, handles iterations
+- `WebSearchManager` - Unified search with provider fallback and caching
+- `EnhancedFileManager` - Organized template storage and metadata tracking
+- `PipelineLogger` - Session-based logging for real-time streaming
 
 ### API Endpoints
-- `POST /api/pipeline/start` - Initialize new pipeline run
-- `POST /api/pipeline/iterate` - Run refinement iteration
-- `GET /api/template/<timestamp>` - Retrieve template
-- `POST /api/template/<timestamp>/save` - Save edited template
-- `GET /api/template/<timestamp>/export` - Download as zip
+
+**Pipeline Operations:**
+- `POST /api/pipeline/start` - Begin new pipeline run
+- `POST /api/pipeline/iterate` - Execute next iteration (if instructions present)
+- `GET /api/logs/<session_id>` - Stream logs for active session
+
+**Template Management:**
 - `GET /api/templates` - List all generated templates
+- `GET /api/template/<timestamp>` - Retrieve template content
+- `POST /api/template/<timestamp>/save` - Save edited template
+- `GET /api/template/<timestamp>/export` - Download template(s) as ZIP
+- `DELETE /api/template/<timestamp>` - Delete template and files
 
-### Data Flow
-1. User submits query via web UI
-2. Pipeline runs research → analysis → template generation
-3. Results stored in timestamped directories under `skills_output/`
-4. Users can preview, edit, and export templates
-5. Iterations possible if analysis provides new instructions
+## Configuration & Environment
 
-## File Structure
+### Required Environment Variables
+- `OPENROUTER_API_KEY` - Authentication for OpenRouter API (required)
+
+### Optional Web Search Variables
+- `WEB_SEARCH_ENABLED` - Enable web search (default: true)
+- `WEB_SEARCH_PROVIDER` - Provider choice: `tavily` | `perplexity` | `openrouter` (default: tavily)
+- `TAVILY_API_KEY` - Required if using Tavily
+- `PERPLEXITY_API_KEY` - Required if using Perplexity
+
+### Configurable Parameters (in `config.py`)
+- Model selections: `RESEARCH_MODEL`, `ANALYSIS_MODEL`, `TEMPLATE_MODEL`
+- Token limits: `MAX_TOKENS_*` for each stage
+- Temperature: `DEFAULT_TEMPERATURE`, `ANALYSIS_TEMPERATURE`
+- Max iterations: `MAX_ITERATIONS`
+
+## Frontend & UI Details
+
+### JavaScript Modules
+- **main.js** - Pipeline UI, form submission, template listing/preview
+- **console.js** - Live log streaming via EventSource, displays real-time pipeline progress
+- **editor.js** - Template editing and preview functionality
+
+### Real-Time Updates
+The UI uses Server-Sent Events (SSE) via the `/api/logs/<session_id>` endpoint to stream pipeline logs in real-time. The console.js module listens to log events and updates the UI live.
+
+## Data Storage Structure
 
 ```
-skills_FFT/
-├── app.py                     # Main Flask application
-├── config.py                  # Configuration management
-├── pipeline.py                # Pipeline logic
-├── requirements.txt           # Python dependencies
-├── .env.example              # Environment variables template
-├── templates/                # Jinja2 templates
-│   ├── index.html           # Main UI
-│   └── preview.html         # Template editor
-├── static/                   # Static assets
-│   ├── css/style.css        # Stylesheets
-│   └── js/                  # JavaScript
-│       ├── main.js          # UI logic
-│       └── editor.js        # Editor functionality
-├── utils/                    # Utility modules
-├── tests/                    # Test files
-└── skills_output/            # Generated templates (git-ignored)
+skills_output/
+└── YYYY-MM-DD_HH-MM-SS/          # Pipeline run timestamp
+    ├── skill.md                   # Final generated template
+    ├── metadata.json              # Pipeline metadata & state
+    ├── iteration_1/               # First iteration
+    │   ├── research.md           # Research stage output
+    │   ├── analysis.md           # Analysis stage output
+    │   ├── template.md           # Generated template
+    │   └── instruction.txt       # New instructions (if applicable)
+    └── iteration_2/               # Subsequent iteration (if applicable)
 ```
 
-## Important Notes
+## Common Development Tasks
 
-### API Key Configuration
-- Requires `OPENROUTER_API_KEY` environment variable
-- Can be set in `.env` file or directly as environment variable
-- Key must have access to the specified models
+### Adding a New Model
+1. Update `config.py` with new model identifier
+2. Modify the appropriate stage function in `pipeline.py` (research/analysis/template)
+3. Adjust prompts if needed for the new model's style
+4. Test via the web UI
 
-### Model Configuration
-- Research: `perplexity/llama-3.1-sonar-large-128k-online`
-- Analysis: `deepseek/deepseek-coder-v2`
-- Template: `deepseek/deepseek-coder-v2`
-- Max iterations: 3 (configurable)
+### Customizing Pipeline Prompts
+Edit the prompt strings in pipeline.py:
+- `run_research()` - Research/investigation prompt
+- `run_analysis()` - Critical analysis prompt
+- `run_template_generation()` - Skill template generation prompt
 
-### State Management
-- Pipeline runs use session IDs for tracking
-- Active sessions stored in memory (development)
-- Production should use Redis or proper session store
+### Debugging Pipeline Issues
+1. Check logs in browser console (real-time via /api/logs)
+2. Enable DEBUG=True in Flask for detailed error output
+3. Check `skills_output/` directory for partial outputs
+4. Review OpenRouter API response in pipeline.py error handling
 
-### Template Format
-Generated templates include:
-- YAML front matter with metadata
-- Skill description and usage
-- Implementation instructions
-- Example interactions
+## Testing Notes
 
-## Testing
-
-- Unit tests in `tests/test_pipeline.py` for pipeline logic
-- Integration tests in `tests/test_app.py` for Flask routes
-- Mock API responses for reliable testing
-- Run tests before committing changes
-
-## Security Considerations
-
-- Sanitize all user inputs
-- Validate API responses
-- Rate limiting for API endpoints
-- Secure handling of API keys
-- XSS protection in template rendering
+- Tests use mock OpenRouter responses to avoid API costs
+- `test_pipeline.py` covers the 3-stage pipeline logic
+- `test_app.py` covers Flask endpoints and file operations
+- Run tests frequently during development to catch integration issues

@@ -5,106 +5,225 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Skills Development Pipeline</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>AI Skills Development Pipeline</h1>
-            <p class="subtitle">Generate advanced AI agent skills through iterative refinement</p>
-        </header>
-
-        <main>
-            <!-- Query Input Section -->
-            <section class="query-section">
-                <h2>Enter Your Query</h2>
-                <textarea id="queryInput" placeholder="e.g., Research quantum computing optimization techniques..."></textarea>
-                <div class="button-group">
-                    <button id="startBtn" class="btn btn-primary">Start Pipeline</button>
-                    <button id="iterateBtn" class="btn btn-secondary" disabled>Iterate</button>
-                </div>
-            </section>
-
-            <!-- Status Indicator -->
-            <section class="status-section">
-                <div id="status" class="status">
-                    <span class="status-indicator"></span>
-                    <span class="status-text">Ready</span>
-                </div>
-            </section>
-
-            <!-- Results Section -->
-            <section class="results-section" style="display: none;">
-                <h2>Results</h2>
-                <div class="results-meta">
-                    <span>Iteration: <strong id="iterationCount">0</strong></span>
-                    <span>Timestamp: <strong id="timestamp">-</strong></span>
-                    <span class="web-search-status" id="webSearchStatus" style="display: none;">
-                        <span class="search-indicator">🔍</span>
-                        Web Search: <strong id="webSearchProvider">-</strong>
-                    </span>
-                </div>
-
-                <div class="tabs">
-                    <button class="tab-btn active" data-tab="research">Research</button>
-                    <button class="tab-btn" data-tab="analysis">Analysis</button>
-                    <button class="tab-btn" data-tab="template">Template</button>
-                </div>
-
-                <div class="tab-content">
-                    <div id="research-tab" class="tab-pane active">
-                        <div class="output-container">
-                            <pre id="researchOutput" class="output-text"></pre>
-                            <button class="copy-btn" data-target="researchOutput">Copy</button>
+    <div class="app-layout">
+        <!-- Main Panel -->
+        <div class="main-panel">
+            <!-- Header -->
+            <header class="app-header">
+                <div class="header-content">
+                    <div class="header-text">
+                        <h1 class="app-title">Skills Pipeline</h1>
+                        <p class="app-subtitle">Advanced AI Agent Generation</p>
+                    </div>
+                    <div class="header-actions">
+                        <button class="icon-btn" id="templatesToggle" title="View Templates">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+                            </svg>
+                        </button>
+                        <div class="header-loading" id="headerLoading">
+                            <div class="header-spinner"></div>
+                            <span class="header-loading-text">Processing...</span>
+                        </div>
+                        <div class="status-indicator" id="globalStatus">
+                            <span class="status-dot"></span>
+                            <span class="status-text">Ready</span>
                         </div>
                     </div>
+                </div>
+            </header>
 
-                    <div id="analysis-tab" class="tab-pane">
-                        <div class="output-container">
-                            <pre id="analysisOutput" class="output-text"></pre>
-                            <button class="copy-btn" data-target="analysisOutput">Copy</button>
+            <!-- Main Content -->
+            <div class="main-content">
+                <!-- Query Section -->
+                <section class="input-section">
+                    <div class="query-wrapper">
+                        <label class="input-label">Query</label>
+                        <textarea
+                            id="queryInput"
+                            class="query-input"
+                            placeholder="Describe the AI skill you want to create..."
+                            rows="3"
+                        ></textarea>
+                        <div class="input-actions">
+                            <button id="startBtn" class="btn btn-primary">
+                                <span class="btn-text">Generate Skill</span>
+                                <span class="btn-icon">→</span>
+                            </button>
+                            <button id="iterateBtn" class="btn btn-secondary" disabled>
+                                <span class="btn-text">Refine</span>
+                                <span class="btn-icon">↻</span>
+                            </button>
                         </div>
                     </div>
+                </section>
 
-                    <div id="template-tab" class="tab-pane">
-                        <div class="output-container">
-                            <pre id="templateOutput" class="output-text"></pre>
-                            <div class="template-actions">
-                                <button id="previewBtn" class="btn btn-outline">Preview & Edit</button>
-                                <button id="exportBtn" class="btn btn-outline">Export</button>
+                <!-- Results Section -->
+                <section id="resultsSection" class="results-section" style="display: none;">
+                    <div class="results-header">
+                        <div class="results-meta">
+                            <div class="meta-item">
+                                <span class="meta-label">Iteration</span>
+                                <span class="meta-value" id="iterationCount">1</span>
+                            </div>
+                            <div class="meta-item">
+                                <span class="meta-label">Status</span>
+                                <span class="meta-value" id="pipelineStatus">Complete</span>
+                            </div>
+                            <div class="meta-item web-status" id="webSearchStatus" style="display: none;">
+                                <span class="meta-label">Web Search</span>
+                                <span class="meta-value" id="webSearchProvider">-</span>
+                            </div>
+                        </div>
+                        
+                        <!-- Stage Progress Indicators -->
+                        <div class="stage-indicators" id="stageIndicators" style="display: none;">
+                            <div class="stage-item" id="stage-research">
+                                <span class="stage-icon">📊</span>
+                                <span>Research</span>
+                            </div>
+                            <span class="stage-arrow">→</span>
+                            <div class="stage-item" id="stage-analysis">
+                                <span class="stage-icon">🔍</span>
+                                <span>Analysis</span>
+                            </div>
+                            <span class="stage-arrow">→</span>
+                            <div class="stage-item" id="stage-template">
+                                <span class="stage-icon">📝</span>
+                                <span>Template</span>
                             </div>
                         </div>
                     </div>
-                </div>
-            </section>
 
-            <!-- Templates List Section -->
-            <section class="templates-section">
-                <h2>Generated Templates</h2>
-                <button id="refreshBtn" class="btn btn-small">Refresh</button>
-                <div id="templatesList" class="templates-list">
-                    <p class="no-templates">No templates generated yet</p>
-                </div>
-            </section>
-        </main>
-    </div>
+                    <!-- Tab Navigation -->
+                    <nav class="tab-nav">
+                        <button class="tab-btn active" data-tab="research">
+                            <span class="tab-icon">📊</span>
+                            Research
+                        </button>
+                        <button class="tab-btn" data-tab="analysis">
+                            <span class="tab-icon">🔍</span>
+                            Analysis
+                        </button>
+                        <button class="tab-btn" data-tab="template">
+                            <span class="tab-icon">📝</span>
+                            Template
+                        </button>
+                    </nav>
 
-    <!-- Loading Modal -->
-    <div id="loadingModal" class="modal" style="display: none;">
-        <div class="modal-content">
-            <div class="spinner"></div>
-            <p id="loadingText">Processing...</p>
+                    <!-- Tab Content -->
+                    <div class="tab-content">
+                        <div id="research-tab" class="tab-pane active">
+                            <div class="content-card">
+                                <div class="card-header">
+                                    <h3>Research Findings</h3>
+                                    <button class="copy-btn" data-target="researchOutput">Copy</button>
+                                </div>
+                                <div class="card-body">
+                                    <pre id="researchOutput" class="code-output"></pre>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="analysis-tab" class="tab-pane">
+                            <div class="content-card">
+                                <div class="card-header">
+                                    <h3>Deep Analysis</h3>
+                                    <button class="copy-btn" data-target="analysisOutput">Copy</button>
+                                </div>
+                                <div class="card-body">
+                                    <pre id="analysisOutput" class="code-output"></pre>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="template-tab" class="tab-pane">
+                            <div class="content-card">
+                                <div class="card-header">
+                                    <h3>Generated Template</h3>
+                                    <div class="card-actions">
+                                        <button id="previewBtn" class="btn btn-small">Preview</button>
+                                        <button id="exportBtn" class="btn btn-small">Export</button>
+                                    </div>
+                                </div>
+                                <div class="card-body">
+                                    <pre id="templateOutput" class="code-output"></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Templates Section -->
+                <section id="templatesSection" class="templates-section" style="display: none;">
+                    <div class="section-header">
+                        <h2>Generated Skills</h2>
+                        <button id="refreshBtn" class="btn btn-small">
+                            <span class="btn-icon">↻</span>
+                            Refresh
+                        </button>
+                    </div>
+                    <div id="templatesList" class="templates-grid">
+                        <p class="empty-state">No skills generated yet</p>
+                    </div>
+                </section>
+            </div>
+        </div>
+
+        <!-- Console Panel -->
+        <div class="console-panel">
+            <div class="console-header">
+                <div class="console-title">
+                    <span class="console-icon">▶</span>
+                    Console
+                </div>
+                <div class="console-controls">
+                    <button id="consoleFilter" class="filter-btn" title="Filter logs">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.707.293l-6.414-6.414A1 1 0 014 6.586V4z"/>
+                            <path d="M21 15a1 1 0 01-1 1H4a1 1 0 01-1-1v-4.586a1 1 0 011.707-.293l6.414 6.414a1 1 0 00.707.293l6.414-6.414A1 1 0 0121 10.414V15z"/>
+                        </svg>
+                    </button>
+                    <button id="consoleClear" class="clear-btn" title="Clear logs">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <div class="console-filters" id="consoleFilters" style="display: none;">
+                <button class="filter-chip active" data-level="all">All</button>
+                <button class="filter-chip" data-level="info">Info</button>
+                <button class="filter-chip" data-level="success">✓</button>
+                <button class="filter-chip" data-level="warning">⚠</button>
+                <button class="filter-chip" data-level="error">✗</button>
+            </div>
+
+            <div class="console-output" id="consoleOutput">
+                <div class="console-line info">
+                    <span class="timestamp">System ready</span>
+                    <span class="message">Welcome to AI Skills Development Pipeline</span>
+                </div>
+            </div>
+
+            <div class="console-footer">
+                <div class="console-stats">
+                    <span id="logCount">0 logs</span>
+                    <span id="scrollStatus">Auto-scroll</span>
+                </div>
+            </div>
         </div>
     </div>
 
-    <!-- Error Modal -->
-    <div id="errorModal" class="modal" style="display: none;">
-        <div class="modal-content">
-            <h3>Error</h3>
-            <p id="errorMessage"></p>
-            <button class="btn btn-primary" onclick="closeErrorModal()">OK</button>
-        </div>
-    </div>
+    <!-- Modals removed - using inline indicators instead -->
 
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/console.js') }}"></script>
 </body>
 </html>

@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 import requests
 
 from config import Config
+from utils.logger import pipeline_logger
 
 
 @dataclass
@@ -33,57 +34,101 @@ class WebSearchManager:
         self.cache = {}  # Simple in-memory cache
         self.cache_ttl = 3600  # 1 hour cache TTL
 
-    async def search(self, query: str, max_results: int = 10, **kwargs) -> List[SearchResult]:
+    async def search(
+        self,
+        query: str,
+        max_results: int = 10,
+        session_id: Optional[str] = None,
+        **kwargs
+    ) -> List[SearchResult]:
         """
         Execute search with fallback strategy based on priority
         Priority: 1=Tavily, 2=Perplexity, 3=OpenRouter
         """
+        active_session_id = session_id or "unknown"
+        pipeline_logger.info(active_session_id, "🔍 Starting web search", 'websearch')
+        pipeline_logger.info(active_session_id, f"Query: {query}", 'websearch')
+        pipeline_logger.info(active_session_id, f"Max results: {max_results}", 'websearch')
+
         # Check cache first
         cache_key = f"{query}_{max_results}"
         if cache_key in self.cache:
             cached_data, timestamp = self.cache[cache_key]
             if time.time() - timestamp < self.cache_ttl:
+                pipeline_logger.info(active_session_id, "✓ Using cached results", 'websearch')
                 return cached_data
 
         results = []
         last_error = None
 
         # Try providers in priority order
-        for provider_name in Config.WEB_SEARCH_PRIORITY:
+        for i, provider_name in enumerate(Config.WEB_SEARCH_PRIORITY):
             if provider_name not in self.providers:
+                pipeline_logger.warning(active_session_id, f"Provider {provider_name} not available", 'websearch')
                 continue
 
             provider = self.providers[provider_name]
 
             # Check if provider is configured
             if not provider.is_configured():
+                pipeline_logger.warning(active_session_id, f"Provider {provider_name} not configured", 'websearch')
                 continue
 
             try:
+                pipeline_logger.info(
+                    active_session_id,
+                    f"\n→ Attempting {provider_name.upper()} (provider {i+1}/{len(Config.WEB_SEARCH_PRIORITY)})",
+                    'websearch'
+                )
+
                 # Implement exponential backoff for retries
                 for attempt in range(3):
                     try:
                         results = await provider.search(query, max_results, **kwargs)
                         if results:
+                            pipeline_logger.success(active_session_id, f"✓ {provider_name.upper()} successful!", 'websearch')
+                            pipeline_logger.info(active_session_id, f"  Found {len(results)} results", 'websearch')
+
+                            # Log each result briefly
+                            for j, result in enumerate(results[:3], 1):
+                                pipeline_logger.info(active_session_id, f"  Result {j}: {result.title}", 'websearch')
+                                pipeline_logger.info(active_session_id, f"    Source: {result.source}", 'websearch')
+                                if result.url:
+                                    pipeline_logger.info(active_session_id, f"    URL: {result.url}", 'websearch')
+
                             # Cache successful results
                             self.cache[cache_key] = (results, time.time())
                             return results
+                        else:
+                            pipeline_logger.warning(active_session_id, f"  No results from {provider_name.upper()}", 'websearch')
                         break
                     except Exception as e:
                         if attempt == 2:  # Last attempt
+                            pipeline_logger.error(active_session_id, "  ✗ Final attempt failed", 'websearch')
+                            pipeline_logger.error(active_session_id, f"  Error: {str(e)}", 'websearch')
                             last_error = e
                             break
-                        # Exponential backoff: 1s, 2s, 4s
-                        await asyncio.sleep(2 ** attempt)
+                        else:
+                            pipeline_logger.warning(
+                                active_session_id,
+                                f"  Attempt {attempt + 1} failed, retrying...",
+                                'websearch'
+                            )
+                            # Exponential backoff: 1s, 2s, 4s
+                            await asyncio.sleep(2 ** attempt)
 
             except Exception as e:
+                pipeline_logger.error(active_session_id, f"✗ {provider_name.upper()} failed", 'websearch')
+                pipeline_logger.error(active_session_id, f"  Error: {str(e)}", 'websearch')
                 last_error = e
-                print(f"Provider {provider_name} failed: {str(e)}")
                 continue
 
         # If all providers fail, return empty or raise
         if last_error:
-            print(f"All web search providers failed. Last error: {str(last_error)}")
+            pipeline_logger.error(active_session_id, "\n❌ All web search providers failed!", 'websearch')
+            pipeline_logger.error(active_session_id, f"Last error: {str(last_error)}", 'websearch')
+        else:
+            pipeline_logger.warning(active_session_id, "\n⚠️ No web search providers were configured", 'websearch')
 
         return []
 
