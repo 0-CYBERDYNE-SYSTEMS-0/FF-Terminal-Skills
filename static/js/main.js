@@ -2,6 +2,8 @@
 let currentSessionId = null;
 let currentTimestamp = null;
 let canIterate = false;
+let statusPoller = null;
+let logSource = null;
 
 // DOM Elements
 const queryInput = document.getElementById('queryInput');
@@ -62,6 +64,9 @@ async function startPipeline() {
 
     setLoading('Running pipeline...');
     disableButtons(true);
+    clearLogOutput();
+    resultsSection.style.display = 'block';
+    switchTab('logs');
 
     try {
         const response = await fetch('/api/pipeline/start', {
@@ -81,18 +86,20 @@ async function startPipeline() {
         // Update state
         currentSessionId = data.session_id;
         currentTimestamp = data.timestamp;
-        canIterate = data.can_iterate;
+        canIterate = false;
 
-        // Update UI
-        updateResults(data);
-        showSuccess('Pipeline completed successfully!');
-        loadTemplates(); // Refresh templates list
+        // Start status polling + logs
+        startStatusPolling();
+        startLogStream();
 
     } catch (error) {
         showError(error.message);
-    } finally {
+        stopStatusPolling();
+        stopLogStream();
         setLoading(false);
         disableButtons(false);
+    } finally {
+        // Loading state is managed by status polling
     }
 }
 
@@ -104,6 +111,8 @@ async function iteratePipeline() {
 
     setLoading('Running iteration...');
     disableButtons(true);
+    resultsSection.style.display = 'block';
+    switchTab('logs');
 
     try {
         const response = await fetch('/api/pipeline/iterate', {
@@ -120,19 +129,18 @@ async function iteratePipeline() {
             throw new Error(data.error || 'Iteration failed');
         }
 
-        // Update state
-        canIterate = data.can_iterate;
-
-        // Update UI
-        updateResults(data);
-        showSuccess('Iteration completed successfully!');
-        loadTemplates(); // Refresh templates list
+        // Start status polling + logs
+        startStatusPolling();
+        startLogStream();
 
     } catch (error) {
         showError(error.message);
-    } finally {
+        stopStatusPolling();
+        stopLogStream();
         setLoading(false);
         disableButtons(false);
+    } finally {
+        // Loading state is managed by status polling
     }
 }
 
@@ -162,6 +170,105 @@ function updateResults(data) {
 
     // Switch to template tab
     switchTab('template');
+}
+
+async function pollStatus() {
+    if (!currentSessionId) return;
+
+    try {
+        const response = await fetch(`/api/pipeline/status?session_id=${currentSessionId}`);
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || 'Failed to fetch status');
+        }
+
+        if (data.status === 'running' || data.status === 'queued') {
+            const stageLabel = data.stage ? `Stage: ${data.stage}` : 'Processing...';
+            setLoading(stageLabel);
+            return;
+        }
+
+        if (data.status === 'error') {
+            stopStatusPolling();
+            stopLogStream();
+            setLoading(false);
+            disableButtons(false);
+            showError(data.error || 'Pipeline failed');
+            return;
+        }
+
+        if (data.status === 'completed') {
+            stopStatusPolling();
+            stopLogStream();
+            setLoading(false);
+            canIterate = data.can_iterate;
+            updateResults(data);
+            showSuccess('Pipeline completed successfully!');
+            loadTemplates();
+            disableButtons(false);
+        }
+    } catch (error) {
+        stopStatusPolling();
+        setLoading(false);
+        disableButtons(false);
+        showError(error.message);
+    }
+}
+
+function startStatusPolling() {
+    stopStatusPolling();
+    pollStatus();
+    statusPoller = setInterval(pollStatus, 1500);
+}
+
+function stopStatusPolling() {
+    if (statusPoller) {
+        clearInterval(statusPoller);
+        statusPoller = null;
+    }
+}
+
+function startLogStream() {
+    if (!currentSessionId) return;
+
+    stopLogStream();
+
+    logSource = new EventSource(`/api/pipeline/logs?session_id=${currentSessionId}`);
+    logSource.onmessage = (event) => {
+        if (!event.data) return;
+        try {
+            const entry = JSON.parse(event.data);
+            appendLogEntry(entry);
+        } catch (error) {
+            console.warn('Invalid log entry', error);
+        }
+    };
+    logSource.onerror = () => {
+        stopLogStream();
+    };
+}
+
+function stopLogStream() {
+    if (logSource) {
+        logSource.close();
+        logSource = null;
+    }
+}
+
+function appendLogEntry(entry) {
+    const logOutput = document.getElementById('logOutput');
+    if (!logOutput) return;
+    const timestamp = entry.timestamp ? `[${entry.timestamp}] ` : '';
+    logOutput.textContent += `${timestamp}${entry.message}\n`;
+    logOutput.scrollTop = logOutput.scrollHeight;
+}
+
+function clearLogOutput() {
+    const logOutput = document.getElementById('logOutput');
+    if (logOutput) {
+        logOutput.textContent = '';
+    }
 }
 
 function switchTab(tabName) {

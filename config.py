@@ -32,7 +32,7 @@ class Config:
     WEB_SEARCH_PRIORITY = ['tavily', 'perplexity', 'openrouter']
 
     # Pipeline Configuration
-    MAX_ITERATIONS = 3
+    MAX_ITERATIONS = 9
     MAX_TOKENS_RESEARCH = 4096
     MAX_TOKENS_ANALYSIS = 8192
     MAX_TOKENS_TEMPLATE = 4096

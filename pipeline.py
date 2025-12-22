@@ -3,7 +3,7 @@ import json
 import re
 import asyncio
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from config import Config
 from utils.web_search_manager import WebSearchManager, SearchResult
@@ -13,9 +13,11 @@ from utils.file_manager import EnhancedFileManager
 class PipelineState:
     """Manages the state of a pipeline run"""
 
-    def __init__(self, query: str):
+    def __init__(self, query: str, session_id: Optional[str] = None,
+                 timestamp: Optional[str] = None):
         self.query = query
-        self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self.session_id = session_id
+        self.timestamp = timestamp or datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self.iteration_count = 0
         self.research_output = ""
         self.analysis_output = ""
@@ -27,6 +29,7 @@ class PipelineState:
         """Convert state to dictionary for storage"""
         return {
             'query': self.query,
+            'session_id': self.session_id,
             'timestamp': self.timestamp,
             'iteration_count': self.iteration_count,
             'research_output': self.research_output,
@@ -52,8 +55,13 @@ class AIPipeline:
             self.web_search = None
         self.file_manager = EnhancedFileManager()
 
+    def _log(self, logger: Optional[Callable[[str], None]], message: str) -> None:
+        if logger:
+            logger(message)
+
     def call_model(self, model: str, messages: List[Dict],
-                   max_tokens: int = None, temperature: float = None) -> str:
+                   max_tokens: int = None, temperature: float = None,
+                   logger: Optional[Callable[[str], None]] = None) -> str:
         """Make API call to OpenRouter with fallback models"""
 
         # List of models to try in order
@@ -74,6 +82,7 @@ class AIPipeline:
             }
 
             try:
+                self._log(logger, f"Calling model: {model_to_use}")
                 response = requests.post(
                     Config.OPENROUTER_API_URL,
                     headers=self.headers,
@@ -85,12 +94,14 @@ class AIPipeline:
                     return response.json()['choices'][0]['message']['content']
                 else:
                     error_msg = f"API error for {model_to_use}: {response.status_code} - {response.text}"
+                    self._log(logger, error_msg)
                     print(error_msg)
                     last_error = Exception(error_msg)
                     continue
 
             except requests.exceptions.RequestException as e:
                 error_msg = f"Request failed for {model_to_use}: {str(e)}"
+                self._log(logger, error_msg)
                 print(error_msg)
                 last_error = Exception(error_msg)
                 continue
@@ -98,9 +109,11 @@ class AIPipeline:
         # If all models failed, raise the last error
         raise last_error or Exception("All models failed to respond")
 
-    def run_research(self, query: str) -> str:
+    def run_research(self, query: str,
+                     logger: Optional[Callable[[str], None]] = None) -> str:
         """Stage 1: Enhanced Domain Research with Web Search"""
 
+        self._log(logger, "Stage 1: Research started")
         # Gather web search results if enabled
         web_context = ""
         search_sources = []
@@ -109,6 +122,7 @@ class AIPipeline:
                 # Run web search
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
+                self._log(logger, "Running web search")
                 search_results = loop.run_until_complete(
                     self.web_search.search(query, max_results=5)
                 )
@@ -126,6 +140,7 @@ class AIPipeline:
                         search_sources.append(f"{result.title} ({result.source})")
 
             except Exception as e:
+                self._log(logger, f"Web search failed: {str(e)}")
                 print(f"Web search failed: {str(e)}")
                 # Continue without web search if it fails
 
@@ -143,6 +158,7 @@ class AIPipeline:
                         example_context += f"  {example['content'][:200]}...\n"
                     break  # Use first keyword that finds examples
         except Exception as e:
+            self._log(logger, f"Failed to load examples: {str(e)}")
             print(f"Failed to load examples: {str(e)}")
 
         # Build enhanced prompt
@@ -166,12 +182,15 @@ class AIPipeline:
         return self.call_model(
             Config.RESEARCH_MODEL,
             messages,
-            max_tokens=Config.MAX_TOKENS_RESEARCH
+            max_tokens=Config.MAX_TOKENS_RESEARCH,
+            logger=logger
         )
 
-    def run_analysis(self, research_output: str, previous_analysis: str = "") -> Tuple[str, str]:
+    def run_analysis(self, research_output: str, previous_analysis: str = "",
+                     logger: Optional[Callable[[str], None]] = None) -> Tuple[str, str]:
         """Stage 2: Deep Analysis"""
 
+        self._log(logger, "Stage 2: Analysis started")
         context = f"\nPrevious Analysis: {previous_analysis}" if previous_analysis else ""
 
         prompt = (
@@ -193,7 +212,8 @@ class AIPipeline:
             Config.ANALYSIS_MODEL,
             messages,
             max_tokens=Config.MAX_TOKENS_ANALYSIS,
-            temperature=Config.ANALYSIS_TEMPERATURE
+            temperature=Config.ANALYSIS_TEMPERATURE,
+            logger=logger
         )
 
         # Extract new instruction if present
@@ -205,9 +225,11 @@ class AIPipeline:
 
         return analysis, new_instruction
 
-    def run_template_generation(self, research_output: str, analysis_output: str) -> str:
+    def run_template_generation(self, research_output: str, analysis_output: str,
+                                logger: Optional[Callable[[str], None]] = None) -> str:
         """Stage 3: Enhanced Template Generation with File References"""
 
+        self._log(logger, "Stage 3: Template generation started")
         # Find similar templates for reference
         template_references = ""
         try:
@@ -230,6 +252,7 @@ class AIPipeline:
                     except:
                         template_references += "  (Template content unavailable)\n"
         except Exception as e:
+            self._log(logger, f"Failed to load similar templates: {str(e)}")
             print(f"Failed to load similar templates: {str(e)}")
 
         # Build enhanced prompt with references
@@ -270,24 +293,38 @@ class AIPipeline:
         return self.call_model(
             Config.TEMPLATE_MODEL,
             messages,
-            max_tokens=Config.MAX_TOKENS_TEMPLATE
+            max_tokens=Config.MAX_TOKENS_TEMPLATE,
+            logger=logger
         )
 
-    def run_pipeline(self, query: str) -> PipelineState:
+    def run_pipeline(self, query: str, logger: Optional[Callable[[str], None]] = None,
+                     session_id: Optional[str] = None,
+                     timestamp: Optional[str] = None,
+                     stage_callback: Optional[Callable[[str], None]] = None) -> PipelineState:
         """Run the complete pipeline"""
 
-        state = PipelineState(query)
+        state = PipelineState(query, session_id=session_id, timestamp=timestamp)
 
         # Stage 1: Research
-        state.research_output = self.run_research(query)
+        if stage_callback:
+            stage_callback("research")
+        state.research_output = self.run_research(query, logger=logger)
 
         # Stage 2: Analysis
-        state.analysis_output, state.new_instruction = self.run_analysis(state.research_output)
+        if stage_callback:
+            stage_callback("analysis")
+        state.analysis_output, state.new_instruction = self.run_analysis(
+            state.research_output,
+            logger=logger
+        )
 
         # Stage 3: Template Generation
+        if stage_callback:
+            stage_callback("template")
         state.template_output = self.run_template_generation(
             state.research_output,
-            state.analysis_output
+            state.analysis_output,
+            logger=logger
         )
 
         state.iteration_count = 1
@@ -303,7 +340,9 @@ class AIPipeline:
 
         return state
 
-    def run_iteration(self, state: PipelineState) -> PipelineState:
+    def run_iteration(self, state: PipelineState,
+                      logger: Optional[Callable[[str], None]] = None,
+                      stage_callback: Optional[Callable[[str], None]] = None) -> PipelineState:
         """Run an iteration of the pipeline"""
 
         if state.iteration_count >= Config.MAX_ITERATIONS:
@@ -316,16 +355,27 @@ class AIPipeline:
         new_query = state.new_instruction
 
         # Run research with new instruction
-        new_research = self.run_research(new_query)
+        if stage_callback:
+            stage_callback("research")
+        new_research = self.run_research(new_query, logger=logger)
 
         # Run analysis with previous analysis as context
+        if stage_callback:
+            stage_callback("analysis")
         new_analysis, new_instruction = self.run_analysis(
             new_research,
-            state.analysis_output
+            state.analysis_output,
+            logger=logger
         )
 
         # Generate new template
-        new_template = self.run_template_generation(new_research, new_analysis)
+        if stage_callback:
+            stage_callback("template")
+        new_template = self.run_template_generation(
+            new_research,
+            new_analysis,
+            logger=logger
+        )
 
         # Update state
         state.iteration_count += 1

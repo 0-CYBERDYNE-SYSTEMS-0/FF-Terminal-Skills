@@ -5,6 +5,8 @@ import tempfile
 import shutil
 from unittest.mock import patch, Mock, MagicMock
 
+import app as app_module
+from config import Config
 from app import app
 from pipeline import PipelineState
 from utils.file_manager import FileManager
@@ -21,12 +23,19 @@ class TestFlaskApp(unittest.TestCase):
         # Create temporary directory for testing
         self.temp_dir = tempfile.mkdtemp()
         self.original_output_dir = app.config.get('SKILLS_OUTPUT_DIR')
+        self.original_config_output_dir = Config.SKILLS_OUTPUT_DIR
         app.config['SKILLS_OUTPUT_DIR'] = self.temp_dir
+        Config.SKILLS_OUTPUT_DIR = self.temp_dir
+        app_module.active_sessions.clear()
+        app_module.session_status.clear()
+        app_module.session_logs.clear()
+        app_module.session_log_queues.clear()
 
     def tearDown(self):
         """Clean up test fixtures"""
         # Remove temporary directory
         shutil.rmtree(self.temp_dir, ignore_errors=True)
+        Config.SKILLS_OUTPUT_DIR = self.original_config_output_dir
 
     def test_index_route(self):
         """Test main index route"""
@@ -40,11 +49,19 @@ class TestFlaskApp(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
 
     @patch('app.get_pipeline')
-    @patch('app.Config')
-    def test_api_pipeline_start_success(self, mock_config, mock_get_pipeline):
+    @patch('app.Thread')
+    def test_api_pipeline_start_success(self, mock_thread, mock_get_pipeline):
         """Test successful pipeline start"""
-        # Mock config validation
-        mock_config.validate.return_value = True
+        class ImmediateThread:
+            def __init__(self, target=None, daemon=None):
+                self._target = target
+                self.daemon = daemon
+
+            def start(self):
+                if self._target:
+                    self._target()
+
+        mock_thread.side_effect = ImmediateThread
 
         # Mock pipeline
         mock_pipeline = Mock()
@@ -62,13 +79,21 @@ class TestFlaskApp(unittest.TestCase):
                                    json={'query': 'Test query'},
                                    content_type='application/json')
 
-            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.status_code, 202)
             data = json.loads(response.data)
             self.assertEqual(data['query'], 'Test query')
-            self.assertEqual(data['research_output'], 'Research')
-            self.assertEqual(data['analysis_output'], 'Analysis')
-            self.assertEqual(data['template_output'], 'Template')
-            self.assertEqual(data['new_instruction'], 'Instruction')
+            self.assertIn('session_id', data)
+
+            status_response = self.app.get('/api/pipeline/status', query_string={
+                'session_id': data['session_id']
+            })
+            self.assertEqual(status_response.status_code, 200)
+            status_data = json.loads(status_response.data)
+            self.assertEqual(status_data['status'], 'completed')
+            self.assertEqual(status_data['research_output'], 'Research')
+            self.assertEqual(status_data['analysis_output'], 'Analysis')
+            self.assertEqual(status_data['template_output'], 'Template')
+            self.assertEqual(status_data['new_instruction'], 'Instruction')
 
     def test_api_pipeline_start_missing_query(self):
         """Test pipeline start without query"""
@@ -94,8 +119,20 @@ class TestFlaskApp(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
 
     @patch('app.get_pipeline')
-    def test_api_pipeline_iterate_success(self, mock_get_pipeline):
+    @patch('app.Thread')
+    def test_api_pipeline_iterate_success(self, mock_thread, mock_get_pipeline):
         """Test successful pipeline iteration"""
+        class ImmediateThread:
+            def __init__(self, target=None, daemon=None):
+                self._target = target
+                self.daemon = daemon
+
+            def start(self):
+                if self._target:
+                    self._target()
+
+        mock_thread.side_effect = ImmediateThread
+
         # Create mock state
         mock_state = PipelineState("Test query")
         mock_state.iteration_count = 1
@@ -109,16 +146,35 @@ class TestFlaskApp(unittest.TestCase):
         mock_pipeline.run_iteration.return_value = mock_state
         mock_get_pipeline.return_value = mock_pipeline
 
+        app_module.active_sessions['test-session'] = mock_state
+        app_module.session_status['test-session'] = {
+            "status": "completed",
+            "stage": "completed",
+            "query": "Test query",
+            "timestamp": mock_state.timestamp,
+            "error": None,
+            "started_at": "2023-01-01T00:00:00",
+            "updated_at": "2023-01-01T00:00:00"
+        }
+        app_module.init_session_logging('test-session')
+
         # Add to active sessions
-        with patch('app.active_sessions', {'test-session': mock_state}):
+        with patch('app.active_sessions', app_module.active_sessions):
             response = self.app.post('/api/pipeline/iterate',
                                    json={'session_id': 'test-session'},
                                    content_type='application/json')
 
-            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.status_code, 202)
             data = json.loads(response.data)
-            self.assertEqual(data['iteration_count'], 1)
-            self.assertEqual(data['research_output'], "New research")
+            self.assertEqual(data['session_id'], 'test-session')
+
+            status_response = self.app.get('/api/pipeline/status', query_string={
+                'session_id': 'test-session'
+            })
+            self.assertEqual(status_response.status_code, 200)
+            status_data = json.loads(status_response.data)
+            self.assertEqual(status_data['iteration_count'], 1)
+            self.assertEqual(status_data['research_output'], "New research")
 
     def test_api_pipeline_iterate_missing_session(self):
         """Test iteration without session ID"""
@@ -185,6 +241,14 @@ class TestFlaskApp(unittest.TestCase):
         skill_file = os.path.join(template_dir, 'skill.md')
         with open(skill_file, 'w') as f:
             f.write('Original content')
+
+        metadata = {
+            'query': 'Test query',
+            'iteration_count': 1,
+            'created_at': '2023-01-01T00:00:00'
+        }
+        with open(os.path.join(template_dir, 'metadata.json'), 'w') as f:
+            json.dump(metadata, f)
 
         # Save new content
         response = self.app.post(f'/api/template/{timestamp}/save',

@@ -14,6 +14,7 @@ class TestPipelineState(unittest.TestCase):
         state = PipelineState(query)
 
         self.assertEqual(state.query, query)
+        self.assertIsNone(state.session_id)
         self.assertEqual(state.iteration_count, 0)
         self.assertEqual(state.research_output, "")
         self.assertEqual(state.analysis_output, "")
@@ -37,6 +38,7 @@ class TestPipelineState(unittest.TestCase):
 
         expected = {
             'query': query,
+            'session_id': None,
             'timestamp': state.timestamp,
             'iteration_count': 2,
             'research_output': 'Research',
@@ -88,13 +90,14 @@ class TestAIPipeline(unittest.TestCase):
         with self.assertRaises(Exception) as context:
             self.pipeline.call_model("test-model", messages)
 
-        self.assertIn("API error: 400", str(context.exception))
+        self.assertIn("API error for test-model: 400", str(context.exception))
 
     @patch('pipeline.requests.post')
     def test_call_model_request_error(self, mock_post):
         """Test model call with request error"""
         # Mock request exception
-        mock_post.side_effect = Exception("Connection error")
+        import requests
+        mock_post.side_effect = requests.exceptions.RequestException("Connection error")
 
         messages = [{"role": "user", "content": "Test message"}]
 
