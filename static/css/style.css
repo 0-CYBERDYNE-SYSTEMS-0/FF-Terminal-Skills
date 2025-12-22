@@ -284,6 +284,14 @@ section {
     gap: 10px;
 }
 
+.bundle-preview {
+    margin-top: 20px;
+}
+
+.bundle-preview h4 {
+    margin-bottom: 8px;
+}
+
 /* Templates List */
 .templates-section h2 {
     margin-bottom: 20px;
