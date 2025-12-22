@@ -144,13 +144,20 @@ def api_pipeline_start():
 
         def stage_callback(stage: str) -> None:
             update_session_status(session_id, stage=stage)
-            append_session_log(session_id, f"Stage: {stage}")
+            stage_messages = {
+                "research": "🔍 Researching domain knowledge and best practices...",
+                "analysis": "🔬 Analyzing patterns and identifying opportunities...",
+                "template": "🛠️ Crafting your AI skill template...",
+                "completed": "✅ Skill generation complete!"
+            }
+            message = stage_messages.get(stage, f"Processing stage: {stage}")
+            append_session_log(session_id, message)
 
         def run_pipeline_async() -> None:
             logger = create_session_logger(session_id)
             try:
                 update_session_status(session_id, status="running", stage="research")
-                logger("Pipeline started")
+                logger("🚀 Starting AI skill generation pipeline...")
                 pipe = get_pipeline()
                 state = pipe.run_pipeline(
                     query,
@@ -164,10 +171,10 @@ def api_pipeline_start():
                 # Store in session
                 active_sessions[session_id] = state
                 update_session_status(session_id, status="completed", stage="completed")
-                logger("Pipeline completed")
+                logger("🎉 Your AI skill is ready! Check the results below.")
             except Exception as e:
                 update_session_status(session_id, status="error", stage="error", error=str(e))
-                logger(f"Pipeline error: {str(e)}")
+                logger(f"❌ Pipeline encountered an issue: {str(e)}")
 
         Thread(target=run_pipeline_async, daemon=True).start()
 
@@ -203,13 +210,21 @@ def api_pipeline_iterate():
 
         def stage_callback(stage: str) -> None:
             update_session_status(session_id, stage=stage)
-            append_session_log(session_id, f"Stage: {stage}")
+            stage_messages = {
+                "research": "🔍 Refining research based on feedback...",
+                "analysis": "🔬 Re-analyzing with new insights...",
+                "template": "🛠️ Improving skill template...",
+                "completed": "✅ Iteration complete!"
+            }
+            message = stage_messages.get(stage, f"Iteration stage: {stage}")
+            append_session_log(session_id, message)
 
         def run_iteration_async() -> None:
             logger = create_session_logger(session_id)
             try:
                 update_session_status(session_id, status="running", stage="research")
-                logger("Iteration started")
+                logger(f"🔄 Starting iteration #{state.iteration_count + 1}...")
+                logger(f"💡 Applying feedback: {state.new_instruction[:100]}...")
                 pipe = get_pipeline()
                 updated_state = pipe.run_iteration(
                     state,
@@ -221,10 +236,10 @@ def api_pipeline_iterate():
                 # Update session
                 active_sessions[session_id] = updated_state
                 update_session_status(session_id, status="completed", stage="completed")
-                logger("Iteration completed")
+                logger("✅ Skill refined successfully! Check the improved version.")
             except Exception as e:
                 update_session_status(session_id, status="error", stage="error", error=str(e))
-                logger(f"Iteration error: {str(e)}")
+                logger(f"❌ Iteration failed: {str(e)}")
 
         Thread(target=run_iteration_async, daemon=True).start()
 
@@ -236,6 +251,98 @@ def api_pipeline_iterate():
 
     except Exception as e:
         handle_api_exception("Pipeline iteration", e)
+
+
+@app.route('/api/pipeline/refine', methods=['POST'])
+def api_pipeline_refine():
+    """Handle chat-based refinement requests"""
+    try:
+        data = request.get_json()
+        session_id = data.get('session_id')
+        user_message = data.get('message')
+
+        if not session_id or not user_message:
+            raise BadRequest("session_id and message required")
+
+        state = get_session_state(session_id)
+
+        # Generate context-aware refinement prompt
+        context_prompt = f"""
+The user has requested a refinement to their AI skill.
+
+**Current Skill:**
+{state.template_output[:1000]}...
+
+**User's Request:**
+{user_message}
+
+**Previous Research:**
+{state.research_output[:500]}...
+
+**Previous Analysis:**
+{state.analysis_output[:500]}...
+
+Please analyze this request and provide:
+1. What specific changes are needed
+2. How these changes should be implemented
+3. Any additional research needed
+4. Updated skill template incorporating the changes
+
+Think through this step-by-step and explain your reasoning.
+"""
+
+        def refinement_stage_callback(stage: str) -> None:
+            update_session_status(session_id, stage=stage)
+            stage_messages = {
+                "research": "🔍 Gathering additional information for your request...",
+                "analysis": "🔬 Planning the best approach to implement changes...",
+                "template": "🛠️ Updating your skill with the requested changes...",
+                "completed": "✅ Refinement complete!"
+            }
+            message = stage_messages.get(stage, f"Refinement: {stage}")
+            append_session_log(session_id, message)
+
+        def run_refinement_async():
+            logger = create_session_logger(session_id)
+            try:
+                logger(f"💬 User request: {user_message[:100]}...")
+                logger("🤔 Analyzing how best to address your request...")
+
+                update_session_status(session_id, status="running", stage="research")
+
+                pipe = get_pipeline()
+
+                # Run refinement pipeline
+                refined_state = pipe.run_refinement(
+                    state,
+                    context_prompt,
+                    logger=logger,
+                    stage_callback=refinement_stage_callback
+                )
+
+                # Save and update
+                FileManager.save_pipeline_state(refined_state)
+                active_sessions[session_id] = refined_state
+                update_session_status(session_id, status="completed", stage="completed")
+                logger("✅ Your skill has been refined! Check the updated version.")
+
+                # Notify frontend via session update
+                # (Frontend polls status endpoint)
+
+            except Exception as e:
+                update_session_status(session_id, status="error", stage="error", error=str(e))
+                logger(f"❌ Refinement failed: {str(e)}")
+
+        Thread(target=run_refinement_async, daemon=True).start()
+
+        return jsonify({
+            'session_id': session_id,
+            'status': 'processing',
+            'message': 'Processing your refinement request'
+        }), 202
+
+    except Exception as e:
+        handle_api_exception("Pipeline refinement", e)
 
 
 @app.route('/api/pipeline/status')
