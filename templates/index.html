@@ -32,6 +32,22 @@
                 </div>
             </section>
 
+            <!-- Process Stream Section -->
+            <section id="processStream" class="process-stream" style="display: none;">
+                <div class="process-header">
+                    <h2>Building Your AI Skill</h2>
+                    <div class="stage-indicator">
+                        <span class="stage-label" id="currentStage">Ready</span>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progressFill"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="log-stream-container">
+                    <div id="logStream" class="log-stream"></div>
+                </div>
+            </section>
+
             <!-- Results Section -->
             <section class="results-section" style="display: none;">
                 <h2>Results</h2>
@@ -71,6 +87,7 @@
                             <pre id="templateOutput" class="output-text"></pre>
                             <div class="template-actions">
                                 <button id="previewBtn" class="btn btn-outline">Preview & Edit</button>
+                                <button id="refineBtn" class="btn btn-primary">💬 Refine with AI</button>
                                 <button id="exportSkillBtn" class="btn btn-outline">Download SKILL.md</button>
                                 <button id="exportBundleBtn" class="btn btn-outline">Download Bundle</button>
                             </div>
@@ -90,6 +107,27 @@
                 </div>
             </section>
 
+            <!-- Chat Refinement Section -->
+            <section id="chatRefinement" class="chat-refinement" style="display: none;">
+                <div class="chat-header">
+                    <h2>💬 Refine Your Skill</h2>
+                    <p>Chat with the AI to make any changes you need</p>
+                </div>
+
+                <div class="chat-container">
+                    <div id="chatMessages" class="chat-messages"></div>
+
+                    <div class="chat-input-container">
+                        <textarea id="chatInput"
+                                  placeholder="E.g., 'Add more code examples', 'Focus on Python instead', 'Make it more beginner-friendly'..."
+                                  rows="2"></textarea>
+                        <button id="chatSendBtn" class="btn btn-primary">
+                            <span>Send</span>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
             <!-- Templates List Section -->
             <section class="templates-section">
                 <h2>Generated Templates</h2>
@@ -99,14 +137,6 @@
                 </div>
             </section>
         </main>
-    </div>
-
-    <!-- Loading Modal -->
-    <div id="loadingModal" class="modal" style="display: none;">
-        <div class="modal-content">
-            <div class="spinner"></div>
-            <p id="loadingText">Processing...</p>
-        </div>
     </div>
 
     <!-- Error Modal -->

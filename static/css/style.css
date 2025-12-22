@@ -14,6 +14,19 @@
     --code-bg: #f1f5f9;
     --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
     --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+
+    /* Process Display Variables */
+    --process-bg: #0d1117;
+    --log-entry-bg: #161b22;
+    --log-info: #58a6ff;
+    --log-success: #3fb950;
+    --log-warning: #d29922;
+    --log-error: #f85149;
+    --log-stage: #f0f6fc;
+    --stage-active: #f0f6fc;
+    --progress-bg: #21262d;
+    --progress-fill: #238636;
+    --process-border: #30363d;
 }
 
 * {
@@ -613,6 +626,224 @@ section {
     }
 }
 
+/* Process Stream Section */
+.process-stream {
+    background: var(--process-bg);
+    border: 1px solid var(--process-border);
+    border-radius: 8px;
+    margin-bottom: 24px;
+    overflow: hidden;
+}
+
+.process-header {
+    background: var(--progress-bg);
+    padding: 20px;
+    border-bottom: 1px solid var(--process-border);
+}
+
+.process-header h2 {
+    color: var(--stage-active);
+    margin-bottom: 12px;
+    font-size: 1.5rem;
+    font-weight: 600;
+}
+
+.stage-indicator {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.stage-label {
+    color: var(--log-stage);
+    font-size: 14px;
+    font-weight: 500;
+    min-width: 200px;
+}
+
+.progress-bar {
+    flex: 1;
+    height: 8px;
+    background: var(--progress-bg);
+    border: 1px solid var(--process-border);
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+}
+
+.progress-fill {
+    height: 100%;
+    background: var(--progress-fill);
+    width: 0%;
+    transition: width 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.progress-fill::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(
+        90deg,
+        transparent,
+        rgba(255, 255, 255, 0.3),
+        transparent
+    );
+    animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+}
+
+/* Log Stream Container */
+.log-stream-container {
+    max-height: 400px;
+    overflow-y: auto;
+    background: var(--process-bg);
+}
+
+.log-stream {
+    padding: 16px;
+}
+
+/* Log Entry Styling */
+.log-entry {
+    background: var(--log-entry-bg);
+    border: 1px solid var(--process-border);
+    border-left: 3px solid transparent;
+    border-radius: 4px;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--log-stage);
+    opacity: 0;
+    transform: translateY(-10px);
+    transition: all 0.3s ease;
+}
+
+.log-entry.visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+/* Log Level Styling */
+.log-entry.info {
+    border-left-color: var(--log-info);
+    color: var(--log-info);
+}
+
+.log-entry.success {
+    border-left-color: var(--log-success);
+    color: var(--log-success);
+}
+
+.log-entry.warning {
+    border-left-color: var(--log-warning);
+    color: var(--log-warning);
+}
+
+.log-entry.error {
+    border-left-color: var(--log-error);
+    color: var(--log-error);
+    background: rgba(248, 81, 73, 0.1);
+}
+
+.log-entry.stage {
+    border-left-color: var(--log-stage);
+    color: var(--log-stage);
+    background: rgba(240, 246, 252, 0.05);
+    font-weight: 500;
+}
+
+/* Log Entry Icons */
+.log-entry::before {
+    display: inline-block;
+    margin-right: 8px;
+    font-weight: bold;
+    min-width: 20px;
+}
+
+.log-entry.info::before {
+    content: 'ℹ';
+    color: var(--log-info);
+}
+
+.log-entry.success::before {
+    content: '✓';
+    color: var(--log-success);
+}
+
+.log-entry.warning::before {
+    content: '⚠';
+    color: var(--log-warning);
+}
+
+.log-entry.error::before {
+    content: '✗';
+    color: var(--log-error);
+}
+
+.log-entry.stage::before {
+    content: '→';
+    color: var(--log-stage);
+}
+
+/* Log Timestamp */
+.log-timestamp {
+    color: var(--text-muted);
+    opacity: 0.7;
+    font-size: 11px;
+    margin-right: 8px;
+}
+
+/* Log Entry Hover Effects */
+.log-entry:hover {
+    background: rgba(56, 139, 253, 0.05);
+    box-shadow: 0 0 0 1px rgba(56, 139, 253, 0.2);
+}
+
+/* Custom Scrollbar for Log Stream */
+.log-stream-container::-webkit-scrollbar {
+    width: 8px;
+}
+
+.log-stream-container::-webkit-scrollbar-track {
+    background: var(--progress-bg);
+}
+
+.log-stream-container::-webkit-scrollbar-thumb {
+    background: var(--process-border);
+    border-radius: 4px;
+}
+
+.log-stream-container::-webkit-scrollbar-thumb:hover {
+    background: #484f58;
+}
+
+/* Active Status Animation */
+.process-stream.active .stage-label {
+    animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+    0%, 100% {
+        opacity: 1;
+        text-shadow: 0 0 5px rgba(35, 134, 54, 0.5);
+    }
+    50% {
+        opacity: 0.8;
+        text-shadow: 0 0 10px rgba(35, 134, 54, 0.8);
+    }
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
     .container {
@@ -649,4 +880,118 @@ section {
     #editor {
         min-height: 400px;
     }
+
+    .stage-indicator {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+
+    .stage-label {
+        min-width: auto;
+    }
+
+    .progress-bar {
+        width: 100%;
+    }
+
+    .process-header {
+        padding: 16px;
+    }
+
+    .log-stream {
+        padding: 12px;
+    }
+
+    .log-entry {
+        padding: 8px 12px;
+        font-size: 12px;
+    }
+}
+
+/* Chat Refinement Section */
+.chat-refinement {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-top: 24px;
+}
+
+.chat-header {
+    padding: 20px;
+    border-bottom: 1px solid var(--border);
+}
+
+.chat-header h2 {
+    margin-bottom: 4px;
+}
+
+.chat-header p {
+    color: var(--text-muted);
+    font-size: 14px;
+}
+
+.chat-container {
+    display: flex;
+    flex-direction: column;
+    height: 400px;
+}
+
+.chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    background: var(--background);
+}
+
+.chat-message {
+    margin-bottom: 12px;
+    max-width: 80%;
+    display: flex;
+}
+
+.chat-message.user {
+    margin-left: auto;
+    justify-content: flex-end;
+}
+
+.chat-message.ai {
+    margin-right: auto;
+    justify-content: flex-start;
+}
+
+.chat-bubble {
+    padding: 12px 16px;
+    border-radius: 12px;
+    display: inline-block;
+    max-width: 100%;
+}
+
+.chat-message.user .chat-bubble {
+    background: var(--primary-color);
+    color: white;
+    border-bottom-right-radius: 4px;
+}
+
+.chat-message.ai .chat-bubble {
+    background: var(--code-bg);
+    color: var(--text);
+    border-bottom-left-radius: 4px;
+}
+
+.chat-input-container {
+    display: flex;
+    gap: 12px;
+    padding: 16px;
+    border-top: 1px solid var(--border);
+}
+
+.chat-input-container textarea {
+    flex: 1;
+    min-height: 60px;
+    resize: none;
+}
+
+.chat-input-container button {
+    align-self: flex-end;
 }
