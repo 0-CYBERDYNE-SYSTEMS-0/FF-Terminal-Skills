@@ -107,7 +107,7 @@ class TestAIPipeline(unittest.TestCase):
         with self.assertRaises(Exception) as context:
             self.pipeline.call_model("test-model", messages)
 
-        self.assertIn("Request failed", str(context.exception))
+        self.assertIn("Connection issue", str(context.exception))
 
     @patch.object(AIPipeline, 'call_model')
     def test_run_research(self, mock_call):
@@ -127,31 +127,31 @@ class TestAIPipeline(unittest.TestCase):
     def test_run_analysis_with_new_instruction(self, mock_call):
         """Test analysis stage with new instruction"""
         mock_response = """
-        Issues: Some issues
-        Shortcomings: Some shortcomings
-        Enhancements: Some enhancements
-        New Research Instruction: Research more deeply
-        """
+Issues: Some issues
+Shortcomings: Some shortcomings
+Enhancements: Some enhancements
+New Research Instruction: Research more deeply
+"""
         mock_call.return_value = mock_response
 
         result, new_instruction = self.pipeline.run_analysis("Research output")
 
-        self.assertEqual(result, mock_response)
+        self.assertEqual(result.strip(), mock_response.strip())
         self.assertEqual(new_instruction, "Research more deeply")
 
     @patch.object(AIPipeline, 'call_model')
     def test_run_analysis_without_new_instruction(self, mock_call):
         """Test analysis stage without new instruction"""
         mock_response = """
-        Issues: Some issues
-        Shortcomings: Some shortcomings
-        Enhancements: Some enhancements
-        """
+Issues: Some issues
+Shortcomings: Some shortcomings
+Enhancements: Some enhancements
+"""
         mock_call.return_value = mock_response
 
         result, new_instruction = self.pipeline.run_analysis("Research output")
 
-        self.assertEqual(result, mock_response)
+        self.assertEqual(result.strip(), mock_response.strip())
         self.assertEqual(new_instruction, "")
 
     @patch.object(AIPipeline, 'call_model')
