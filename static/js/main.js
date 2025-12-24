@@ -2,36 +2,39 @@
 let currentSessionId = null;
 let currentTimestamp = null;
 let canIterate = false;
-let statusPollInterval = null;
-let pipelineStartTime = null;
+let statusPoller = null;
+let logSource = null;
 
 // DOM Elements
 const queryInput = document.getElementById('queryInput');
 const startBtn = document.getElementById('startBtn');
 const iterateBtn = document.getElementById('iterateBtn');
-const globalStatus = document.getElementById('globalStatus');
-const statusText = globalStatus ? globalStatus.querySelector('.status-text') : null;
-const resultsSection = document.getElementById('resultsSection');
+const statusEl = document.getElementById('status');
+const statusText = statusEl.querySelector('.status-text');
+const resultsSection = document.querySelector('.results-section');
 const iterationCount = document.getElementById('iterationCount');
-const pipelineStatus = document.getElementById('pipelineStatus');
+const timestampEl = document.getElementById('timestamp');
 const previewBtn = document.getElementById('previewBtn');
 const exportBtn = document.getElementById('exportBtn');
-const templatesToggle = document.getElementById('templatesToggle');
-const templatesSection = document.getElementById('templatesSection');
+const refreshBtn = document.getElementById('refreshBtn');
 const templatesList = document.getElementById('templatesList');
 
 // Tab elements
 const tabBtns = document.querySelectorAll('.tab-btn');
 const tabPanes = document.querySelectorAll('.tab-pane');
 
-// Modal elements removed - using inline indicators instead
+// Modal elements
+const loadingModal = document.getElementById('loadingModal');
+const loadingText = document.getElementById('loadingText');
+const errorModal = document.getElementById('errorModal');
+const errorMessage = document.getElementById('errorMessage');
 
 // Event Listeners
 startBtn.addEventListener('click', startPipeline);
 iterateBtn.addEventListener('click', iteratePipeline);
 previewBtn.addEventListener('click', openPreview);
 exportBtn.addEventListener('click', exportTemplate);
-templatesToggle.addEventListener('click', toggleTemplates);
+refreshBtn.addEventListener('click', loadTemplates);
 
 // Tab switching
 tabBtns.forEach(btn => {
@@ -59,10 +62,11 @@ async function startPipeline() {
         return;
     }
 
-    consoleManager.info(`Starting pipeline with query: "${query}"`, 'init');
-    setLoading('Initializing pipeline...');
+    setLoading('Running pipeline...');
     disableButtons(true);
-    pipelineStartTime = Date.now();
+    clearLogOutput();
+    resultsSection.style.display = 'block';
+    switchTab('logs');
 
     try {
         const response = await fetch('/api/pipeline/start', {
@@ -79,193 +83,23 @@ async function startPipeline() {
             throw new Error(data.error || 'Pipeline failed');
         }
 
-        // Update state IMMEDIATELY
+        // Update state
         currentSessionId = data.session_id;
         currentTimestamp = data.timestamp;
+        canIterate = false;
 
-        // Connect console IMMEDIATELY to this session to catch all logs
-        consoleManager.setSession(currentSessionId);
-
-        // Show results section with loading state
-        showResultsLoading();
-
-        // Start polling for status updates
+        // Start status polling + logs
         startStatusPolling();
+        startLogStream();
 
     } catch (error) {
         showError(error.message);
+        stopStatusPolling();
+        stopLogStream();
         setLoading(false);
         disableButtons(false);
-    }
-}
-
-function showResultsLoading() {
-    // Show results section with skeleton loaders
-    resultsSection.style.display = 'block';
-    
-    // Show stage indicators
-    const stageIndicators = document.getElementById('stageIndicators');
-    if (stageIndicators) {
-        stageIndicators.style.display = 'flex';
-    }
-    
-    // Set loading state
-    pipelineStatus.textContent = 'Processing...';
-    iterationCount.textContent = '0';
-    
-    // Show skeleton loaders in tabs
-    document.getElementById('researchOutput').innerHTML = '<div class="skeleton-loader">Research in progress...</div>';
-    document.getElementById('analysisOutput').innerHTML = '<div class="skeleton-loader">Waiting for research...</div>';
-    document.getElementById('templateOutput').innerHTML = '<div class="skeleton-loader">Waiting for analysis...</div>';
-}
-
-function startStatusPolling() {
-    // Clear any existing interval
-    if (statusPollInterval) {
-        clearInterval(statusPollInterval);
-    }
-
-    // Update immediately
-    updatePipelineStatus();
-
-    // Poll every 1 second
-    statusPollInterval = setInterval(updatePipelineStatus, 1000);
-}
-
-async function updatePipelineStatus() {
-    if (!currentSessionId) return;
-
-    try {
-        const response = await fetch(`/api/pipeline/status/${currentSessionId}`);
-        if (!response.ok) return;
-
-        const data = await response.json();
-        
-        // Update progress indicator
-        updateProgressIndicator(data.current_stage);
-        
-        // Update elapsed time
-        updateElapsedTime();
-        
-        // Update results as they become available
-        if (data.has_research) {
-            document.getElementById('researchOutput').textContent = data.research_output;
-        }
-        if (data.has_analysis) {
-            document.getElementById('analysisOutput').textContent = data.analysis_output;
-        }
-        if (data.has_template) {
-            document.getElementById('templateOutput').textContent = data.template_output;
-        }
-        
-        // Check if completed
-        if (data.current_stage === 'completed') {
-            clearInterval(statusPollInterval);
-            statusPollInterval = null;
-            
-            // Update final state
-            canIterate = data.can_iterate;
-            currentTimestamp = data.timestamp;
-            
-            // Update metadata
-            iterationCount.textContent = data.iteration_count;
-            pipelineStatus.textContent = 'Complete';
-            
-            // Enable buttons
-            setLoading(false);
-            disableButtons(false);
-            
-            // Show success
-            showSuccess('Pipeline completed successfully!');
-            
-            // Switch to template tab
-            switchTab('template');
-        }
-        
-    } catch (error) {
-        console.error('Status poll error:', error);
-    }
-}
-
-function updateProgressIndicator(stage) {
-    const stages = {
-        'initializing': { text: 'Initializing...', percent: 0, current: null },
-        'researching': { text: 'Research Phase', percent: 33, current: 'research' },
-        'analyzing': { text: 'Analysis Phase', percent: 66, current: 'analysis' },
-        'generating_template': { text: 'Generating Template', percent: 90, current: 'template' },
-        'completed': { text: 'Complete', percent: 100, current: 'template' }
-    };
-    
-    const stageInfo = stages[stage] || stages['initializing'];
-    setLoading(stageInfo.text);
-    
-    // Update status text
-    if (statusText) {
-        statusText.textContent = stageInfo.text;
-    }
-    
-    // Update stage indicators
-    updateStageIndicators(stage, stageInfo.current);
-}
-
-function updateStageIndicators(stage, currentStage) {
-    const stageItems = {
-        'research': document.getElementById('stage-research'),
-        'analysis': document.getElementById('stage-analysis'),
-        'template': document.getElementById('stage-template')
-    };
-    
-    // Reset all
-    Object.values(stageItems).forEach(item => {
-        if (item) {
-            item.classList.remove('active', 'completed');
-        }
-    });
-    
-    // Mark completed stages
-    const stageOrder = ['research', 'analysis', 'template'];
-    const currentIndex = stageOrder.indexOf(currentStage);
-    
-    if (currentIndex > -1) {
-        // Mark all previous as completed
-        for (let i = 0; i < currentIndex; i++) {
-            const item = stageItems[stageOrder[i]];
-            if (item) item.classList.add('completed');
-        }
-        
-        // Mark current as active
-        const currentItem = stageItems[currentStage];
-        if (currentItem) currentItem.classList.add('active');
-    }
-    
-    // If completed, mark all as completed
-    if (stage === 'completed') {
-        Object.values(stageItems).forEach(item => {
-            if (item) {
-                item.classList.remove('active');
-                item.classList.add('completed');
-            }
-        });
-    }
-}
-
-function updateElapsedTime() {
-    if (!pipelineStartTime) return;
-    
-    const elapsed = Math.floor((Date.now() - pipelineStartTime) / 1000);
-    const minutes = Math.floor(elapsed / 60);
-    const seconds = elapsed % 60;
-    const timeStr = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-    
-    // Update in header if element exists
-    const headerLoading = document.getElementById('headerLoading');
-    if (headerLoading) {
-        const loadingText = headerLoading.querySelector('.header-loading-text');
-        if (loadingText && loadingText.textContent.indexOf('(') === -1) {
-            loadingText.textContent += ` (${timeStr})`;
-        } else if (loadingText) {
-            loadingText.textContent = loadingText.textContent.replace(/\(\d+:\d+\)/, `(${timeStr})`);
-        }
+    } finally {
+        // Loading state is managed by status polling
     }
 }
 
@@ -277,6 +111,8 @@ async function iteratePipeline() {
 
     setLoading('Running iteration...');
     disableButtons(true);
+    resultsSection.style.display = 'block';
+    switchTab('logs');
 
     try {
         const response = await fetch('/api/pipeline/iterate', {
@@ -293,18 +129,18 @@ async function iteratePipeline() {
             throw new Error(data.error || 'Iteration failed');
         }
 
-        // Update state
-        canIterate = data.can_iterate;
-
-        // Update UI
-        updateResults(data);
-        showSuccess('Iteration completed successfully!');
+        // Start status polling + logs
+        startStatusPolling();
+        startLogStream();
 
     } catch (error) {
         showError(error.message);
-    } finally {
+        stopStatusPolling();
+        stopLogStream();
         setLoading(false);
         disableButtons(false);
+    } finally {
+        // Loading state is managed by status polling
     }
 }
 
@@ -314,14 +150,7 @@ function updateResults(data) {
 
     // Update metadata
     iterationCount.textContent = data.iteration_count;
-    pipelineStatus.textContent = data.new_instruction ? 'Complete' : 'Complete';
-
-    // Update web search status if available
-    const webSearchStatus = document.getElementById('webSearchStatus');
-    if (webSearchStatus && data.web_search_provider) {
-        webSearchStatus.style.display = 'flex';
-        document.getElementById('webSearchProvider').textContent = data.web_search_provider;
-    }
+    timestampEl.textContent = data.timestamp;
 
     // Update outputs
     document.getElementById('researchOutput').textContent = data.research_output;
@@ -330,7 +159,7 @@ function updateResults(data) {
 
     // Update iterate button
     iterateBtn.disabled = !canIterate;
-    iterateBtn.querySelector('.btn-text').textContent = canIterate ? 'Refine' : 'Max iterations';
+    iterateBtn.textContent = canIterate ? 'Iterate' : 'Max iterations reached';
 
     // Update export button
     if (currentTimestamp) {
@@ -341,6 +170,105 @@ function updateResults(data) {
 
     // Switch to template tab
     switchTab('template');
+}
+
+async function pollStatus() {
+    if (!currentSessionId) return;
+
+    try {
+        const response = await fetch(`/api/pipeline/status?session_id=${currentSessionId}`);
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || 'Failed to fetch status');
+        }
+
+        if (data.status === 'running' || data.status === 'queued') {
+            const stageLabel = data.stage ? `Stage: ${data.stage}` : 'Processing...';
+            setLoading(stageLabel);
+            return;
+        }
+
+        if (data.status === 'error') {
+            stopStatusPolling();
+            stopLogStream();
+            setLoading(false);
+            disableButtons(false);
+            showError(data.error || 'Pipeline failed');
+            return;
+        }
+
+        if (data.status === 'completed') {
+            stopStatusPolling();
+            stopLogStream();
+            setLoading(false);
+            canIterate = data.can_iterate;
+            updateResults(data);
+            showSuccess('Pipeline completed successfully!');
+            loadTemplates();
+            disableButtons(false);
+        }
+    } catch (error) {
+        stopStatusPolling();
+        setLoading(false);
+        disableButtons(false);
+        showError(error.message);
+    }
+}
+
+function startStatusPolling() {
+    stopStatusPolling();
+    pollStatus();
+    statusPoller = setInterval(pollStatus, 1500);
+}
+
+function stopStatusPolling() {
+    if (statusPoller) {
+        clearInterval(statusPoller);
+        statusPoller = null;
+    }
+}
+
+function startLogStream() {
+    if (!currentSessionId) return;
+
+    stopLogStream();
+
+    logSource = new EventSource(`/api/pipeline/logs?session_id=${currentSessionId}`);
+    logSource.onmessage = (event) => {
+        if (!event.data) return;
+        try {
+            const entry = JSON.parse(event.data);
+            appendLogEntry(entry);
+        } catch (error) {
+            console.warn('Invalid log entry', error);
+        }
+    };
+    logSource.onerror = () => {
+        stopLogStream();
+    };
+}
+
+function stopLogStream() {
+    if (logSource) {
+        logSource.close();
+        logSource = null;
+    }
+}
+
+function appendLogEntry(entry) {
+    const logOutput = document.getElementById('logOutput');
+    if (!logOutput) return;
+    const timestamp = entry.timestamp ? `[${entry.timestamp}] ` : '';
+    logOutput.textContent += `${timestamp}${entry.message}\n`;
+    logOutput.scrollTop = logOutput.scrollHeight;
+}
+
+function clearLogOutput() {
+    const logOutput = document.getElementById('logOutput');
+    if (logOutput) {
+        logOutput.textContent = '';
+    }
 }
 
 function switchTab(tabName) {
@@ -384,15 +312,6 @@ async function exportTemplate() {
     }
 }
 
-function toggleTemplates() {
-    const isVisible = templatesSection.style.display === 'block';
-    templatesSection.style.display = isVisible ? 'none' : 'block';
-
-    if (!isVisible) {
-        loadTemplates();
-    }
-}
-
 async function loadTemplates() {
     try {
         const response = await fetch('/api/templates');
@@ -408,7 +327,7 @@ async function loadTemplates() {
 
 function renderTemplates(templates) {
     if (templates.length === 0) {
-        templatesList.innerHTML = '<p class="empty-state">No skills generated yet</p>';
+        templatesList.innerHTML = '<p class="no-templates">No templates generated yet</p>';
         return;
     }
 
@@ -421,97 +340,42 @@ function renderTemplates(templates) {
                 <div>Created: ${new Date(template.created_at).toLocaleString()}</div>
             </div>
             <div class="actions">
-                <a href="/preview/${template.timestamp}" class="btn btn-small">Preview</a>
-                <a href="/api/template/${template.timestamp}/export" class="btn btn-small" target="_blank">Export</a>
+                <a href="/preview/${template.timestamp}" class="btn btn-small btn-outline">Preview</a>
+                <a href="/api/template/${template.timestamp}/export" class="btn btn-small btn-outline" target="_blank">Export</a>
             </div>
         </div>
     `).join('');
 }
 
 function setLoading(message) {
-    // Completely avoid modals - just use the inline indicator
-    const headerLoading = document.getElementById('headerLoading');
-    const loadingTextElement = headerLoading ? headerLoading.querySelector('.header-loading-text') : null;
-    const loadingModal = document.getElementById('loadingModal');
-
     if (message) {
-        // Show only inline loading indicator
-        if (headerLoading) {
-            headerLoading.classList.add('show');
-            if (loadingTextElement) {
-                loadingTextElement.textContent = message;
-            }
-        }
-        // Ensure global status is visible
-        if (globalStatus) {
-            globalStatus.style.display = 'flex';
-            updateGlobalStatus('processing', message);
-        }
-        // Never show the modal
-        if (loadingModal) {
-            loadingModal.style.display = 'none';
-        }
+        loadingText.textContent = message;
+        loadingModal.style.display = 'flex';
+        statusEl.classList.add('processing');
+        statusText.textContent = message;
     } else {
-        // Hide loading indicator
-        if (headerLoading) {
-            headerLoading.classList.remove('show');
-        }
-        // Update global status
-        if (globalStatus) {
-            updateGlobalStatus('active', 'Ready');
-        }
-        // Ensure modal is hidden
-        if (loadingModal) {
-            loadingModal.style.display = 'none';
-        }
+        loadingModal.style.display = 'none';
+        statusEl.classList.remove('processing');
+        statusText.textContent = 'Ready';
     }
 }
 
 function showError(message) {
-    // Use global status to show errors inline, no modal
-    if (globalStatus) {
-        globalStatus.style.display = 'flex';
-        updateGlobalStatus('', 'Error: ' + message);
-    }
-
-    // Also show in console
-    if (window.consoleManager) {
-        consoleManager.error(message, 'error');
-    }
-
-    // Auto-clear error after 5 seconds
-    setTimeout(() => {
-        if (globalStatus) {
-            updateGlobalStatus('active', 'Ready');
-        }
-    }, 5000);
+    errorMessage.textContent = message;
+    errorModal.style.display = 'flex';
+    statusEl.classList.add('error');
+    statusText.textContent = 'Error';
 }
 
 function showSuccess(message) {
-    if (globalStatus) {
-        globalStatus.style.display = 'flex';
-        updateGlobalStatus('active', message);
-    }
+    statusEl.classList.remove('processing', 'error');
+    statusText.textContent = message;
 }
 
-// closeErrorModal function removed - no longer needed
-
-function updateGlobalStatus(statusClass, text) {
-    if (globalStatus) {
-        const statusDot = globalStatus.querySelector('.status-dot');
-        const statusText = globalStatus.querySelector('.status-text');
-
-        if (statusDot) {
-            statusDot.className = 'status-dot';
-            if (statusClass) {
-                statusDot.classList.add(statusClass);
-            }
-        }
-
-        if (statusText) {
-            statusText.textContent = text;
-        }
-    }
+function closeErrorModal() {
+    errorModal.style.display = 'none';
+    statusEl.classList.remove('error');
+    statusText.textContent = 'Ready';
 }
 
 function disableButtons(disabled) {
@@ -550,12 +414,4 @@ function escapeHtml(text) {
 }
 
 // Initialize
-document.addEventListener('DOMContentLoaded', () => {
-    // Set initial status
-    updateGlobalStatus('active', 'Ready');
-
-    // Load templates if section is visible
-    if (templatesSection.style.display === 'block') {
-        loadTemplates();
-    }
-});
+loadTemplates();

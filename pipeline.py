@@ -3,22 +3,21 @@ import json
 import re
 import asyncio
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
-import uuid
+from typing import Callable, Dict, List, Optional, Tuple
 
 from config import Config
 from utils.web_search_manager import WebSearchManager, SearchResult
 from utils.file_manager import EnhancedFileManager
-from utils.logger import pipeline_logger, LogLevel
 
 
 class PipelineState:
     """Manages the state of a pipeline run"""
 
-    def __init__(self, query: str, session_id: str = None):
+    def __init__(self, query: str, session_id: Optional[str] = None,
+                 timestamp: Optional[str] = None):
         self.query = query
-        self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        self.session_id = session_id or self.timestamp
+        self.session_id = session_id
+        self.timestamp = timestamp or datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self.iteration_count = 0
         self.research_output = ""
         self.analysis_output = ""
@@ -30,6 +29,7 @@ class PipelineState:
         """Convert state to dictionary for storage"""
         return {
             'query': self.query,
+            'session_id': self.session_id,
             'timestamp': self.timestamp,
             'iteration_count': self.iteration_count,
             'research_output': self.research_output,
@@ -55,12 +55,14 @@ class AIPipeline:
             self.web_search = None
         self.file_manager = EnhancedFileManager()
 
-    def call_model(self, model: str, messages: List[Dict],
-                   max_tokens: int = None, temperature: float = None) -> str:
-        """Make API call to OpenRouter with fallback models"""
+    def _log(self, logger: Optional[Callable[[str], None]], message: str) -> None:
+        if logger:
+            logger(message)
 
-        # Get session_id for logging
-        session_id = getattr(self, "_current_session_id", "unknown")
+    def call_model(self, model: str, messages: List[Dict],
+                   max_tokens: int = None, temperature: float = None,
+                   logger: Optional[Callable[[str], None]] = None) -> str:
+        """Make API call to OpenRouter with fallback models"""
 
         # List of models to try in order
         models_to_try = [model]
@@ -70,13 +72,8 @@ class AIPipeline:
             models_to_try.extend(Config.FALLBACK_RESEARCH_MODELS)
 
         last_error = None
-        pipeline_logger.info(session_id, f"Attempting API call to model(s): {models_to_try}", 'api')
 
-        for i, model_to_use in enumerate(models_to_try):
-            is_fallback = i > 0
-            if is_fallback:
-                pipeline_logger.warning(session_id, f"Trying fallback model {i+1}/{len(models_to_try)}: {model_to_use}", "api")
-
+        for model_to_use in models_to_try:
             payload = {
                 "model": model_to_use,
                 "messages": messages,
@@ -84,16 +81,8 @@ class AIPipeline:
                 "temperature": temperature or Config.DEFAULT_TEMPERATURE
             }
 
-            # Log API request details (without full messages for privacy)
-            pipeline_logger.debug(session_id, f"API Request Details:", "api")
-            pipeline_logger.debug(session_id, f"  URL: {Config.OPENROUTER_API_URL}", "api")
-            pipeline_logger.debug(session_id, f"  Model: {model_to_use}", "api")
-            pipeline_logger.debug(session_id, f"  Max tokens: {payload['max_tokens']}", "api")
-            pipeline_logger.debug(session_id, f"  Temperature: {payload['temperature']}", "api")
-            pipeline_logger.debug(session_id, f"  Messages count: {len(messages)}", "api")
-
             try:
-                pipeline_logger.info(session_id, f"→ Sending request to {model_to_use}...", "api")
+                self._log(logger, f"Calling model: {model_to_use}")
                 response = requests.post(
                     Config.OPENROUTER_API_URL,
                     headers=self.headers,
@@ -102,99 +91,57 @@ class AIPipeline:
                 )
 
                 if response.status_code == 200:
-                    response_data = response.json()
-                    content = response_data['choices'][0]['message']['content']
-                    usage = response_data.get('usage', {})
-
-                    pipeline_logger.success(session_id, f"✓ API call successful!", "api")
-                    if usage:
-                        pipeline_logger.info(session_id, f"  Tokens used: {usage.get('total_tokens', 'N/A')}", "api")
-                        pipeline_logger.info(session_id, f"  Prompt tokens: {usage.get('prompt_tokens', 'N/A')}", "api")
-                        pipeline_logger.info(session_id, f"  Completion tokens: {usage.get('completion_tokens', 'N/A')}", "api")
-
-                    # Log response size
-                    pipeline_logger.debug(session_id, f"  Response size: {len(content)} characters", "api")
-
-                    return content
+                    return response.json()['choices'][0]['message']['content']
                 else:
-                    error_msg = f"API error: {response.status_code} for {model_to_use}"
-                    pipeline_logger.error(session_id, f"✗ {error_msg}", "api")
-                    pipeline_logger.error(session_id, f"  Response: {response.text[:500]}...", "api")
-                    last_error = Exception(f"{error_msg} - {response.text}")
+                    error_msg = f"API error for {model_to_use}: {response.status_code} - {response.text}"
+                    self._log(logger, error_msg)
+                    print(error_msg)
+                    last_error = Exception(error_msg)
                     continue
-
-            except requests.exceptions.Timeout:
-                error_msg = f"Timeout after 120s for {model_to_use}"
-                pipeline_logger.error(session_id, f"✗ {error_msg}", "api")
-                last_error = Exception(error_msg)
-                continue
 
             except requests.exceptions.RequestException as e:
                 error_msg = f"Request failed for {model_to_use}: {str(e)}"
-                pipeline_logger.error(session_id, f"✗ {error_msg}", "api")
-                last_error = Exception(error_msg)
-                continue
-
-            except Exception as e:
-                error_msg = f"Request failed for {model_to_use}: {str(e)}"
-                pipeline_logger.error(session_id, f"✗ {error_msg}", "api")
-                pipeline_logger.error(session_id, f"  Type: {type(e).__name__}", "api")
+                self._log(logger, error_msg)
+                print(error_msg)
                 last_error = Exception(error_msg)
                 continue
 
         # If all models failed, raise the last error
-        error_summary = f"All {len(models_to_try)} model(s) failed to respond"
-        pipeline_logger.error(session_id, f"❌ {error_summary}", "api")
-        raise last_error or Exception(error_summary)
+        raise last_error or Exception("All models failed to respond")
 
-    def run_research(self, query: str) -> str:
+    def run_research(self, query: str,
+                     logger: Optional[Callable[[str], None]] = None) -> str:
         """Stage 1: Enhanced Domain Research with Web Search"""
 
-        # Get session_id (should be set by run_pipeline)
-        session_id = getattr(self, '_current_session_id', str(uuid.uuid4()))
-
-        pipeline_logger.info(session_id, f"=== STAGE 1: RESEARCH ===", 'research')
-        pipeline_logger.info(session_id, f"Query: {query}", 'research')
-        pipeline_logger.info(session_id, f"Web Search Enabled: {Config.WEB_SEARCH_ENABLED}", 'research')
-        pipeline_logger.info(session_id, f"Provider Priority: {Config.WEB_SEARCH_PRIORITY}", 'research')
-
+        self._log(logger, "Stage 1: Research started")
         # Gather web search results if enabled
         web_context = ""
         search_sources = []
         if self.web_search:
             try:
-                pipeline_logger.info(session_id, f"Initiating web search using {Config.WEB_SEARCH_PRIORITY}", "research")
                 # Run web search
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
+                self._log(logger, "Running web search")
                 search_results = loop.run_until_complete(
-                    self.web_search.search(query, max_results=5, session_id=session_id)
+                    self.web_search.search(query, max_results=5)
                 )
                 loop.close()
 
                 if search_results:
-                    pipeline_logger.success(session_id, f"✓ Found {len(search_results)} web search results", "research")
                     # Format search results for prompt
                     web_context = "\n\n## Recent Web Search Results:\n"
                     for i, result in enumerate(search_results[:3], 1):
-                        pipeline_logger.info(session_id, f"Result {i}: {result.title}", "research")
-                        pipeline_logger.info(session_id, f"  Source: {result.source}", "research")
-                        if result.url:
-                            pipeline_logger.info(session_id, f"  URL: {result.url}", "research")
-                        if result.snippet:
-                            pipeline_logger.info(session_id, f"  Snippet: {result.snippet[:200]}...", "research")
                         web_context += f"\n{i}. **{result.title}**\n"
                         if result.snippet:
                             web_context += f"   {result.snippet}\n"
                         if result.url:
                             web_context += f"   Source: {result.url}\n"
                         search_sources.append(f"{result.title} ({result.source})")
-                else:
-                    pipeline_logger.warning(session_id, "✗ No web search results found", 'research')
 
             except Exception as e:
-                pipeline_logger.error(session_id, f"✗ Web search failed: {str(e)}", "research")
-                pipeline_logger.error(session_id, f"  Error details: {type(e).__name__}", "research")
+                self._log(logger, f"Web search failed: {str(e)}")
+                print(f"Web search failed: {str(e)}")
                 # Continue without web search if it fails
 
         # Gather relevant examples from file system
@@ -211,6 +158,7 @@ class AIPipeline:
                         example_context += f"  {example['content'][:200]}...\n"
                     break  # Use first keyword that finds examples
         except Exception as e:
+            self._log(logger, f"Failed to load examples: {str(e)}")
             print(f"Failed to load examples: {str(e)}")
 
         # Build enhanced prompt
@@ -231,37 +179,18 @@ class AIPipeline:
         )
 
         messages = [{"role": "user", "content": prompt}]
-
-        pipeline_logger.info(session_id, f"Calling research model: {Config.RESEARCH_MODEL}", "research")
-        pipeline_logger.info(session_id, f"Max tokens: {Config.MAX_TOKENS_RESEARCH}", "research")
-        pipeline_logger.info(session_id, f"Temperature: {Config.DEFAULT_TEMPERATURE}", "research")
-
-        # Show prompt length (truncated for readability)
-        prompt_preview = prompt[:500] + "..." if len(prompt) > 500 else prompt
-        pipeline_logger.debug(session_id, f"Prompt preview:\n{prompt_preview}", "research")
-
-        result = self.call_model(
+        return self.call_model(
             Config.RESEARCH_MODEL,
             messages,
-            max_tokens=Config.MAX_TOKENS_RESEARCH
+            max_tokens=Config.MAX_TOKENS_RESEARCH,
+            logger=logger
         )
 
-        pipeline_logger.success(session_id, f"✓ Research completed!", "research")
-        pipeline_logger.info(session_id, f"  Response length: {len(result)} characters", "research")
-        pipeline_logger.debug(session_id, f"  Response preview:\n{result[:300]}...", "research")
-
-        return result
-
-    def run_analysis(self, research_output: str, previous_analysis: str = "") -> Tuple[str, str]:
+    def run_analysis(self, research_output: str, previous_analysis: str = "",
+                     logger: Optional[Callable[[str], None]] = None) -> Tuple[str, str]:
         """Stage 2: Deep Analysis"""
 
-        # Get session_id (should be set by run_pipeline)
-        session_id = getattr(self, '_current_session_id', str(uuid.uuid4()))
-
-        pipeline_logger.info(session_id, f"=== STAGE 2: ANALYSIS ===", "analysis")
-        pipeline_logger.info(session_id, f"Research output length: {len(research_output)} characters", "analysis")
-        pipeline_logger.info(session_id, f"Previous analysis length: {len(previous_analysis)} characters", "analysis")
-
+        self._log(logger, "Stage 2: Analysis started")
         context = f"\nPrevious Analysis: {previous_analysis}" if previous_analysis else ""
 
         prompt = (
@@ -279,24 +208,13 @@ class AIPipeline:
             {"role": "user", "content": prompt}
         ]
 
-        pipeline_logger.info(session_id, f"Calling analysis model: {Config.ANALYSIS_MODEL}", "analysis")
-        pipeline_logger.info(session_id, f"Max tokens: {Config.MAX_TOKENS_ANALYSIS}", "analysis")
-        pipeline_logger.info(session_id, f"Temperature: {Config.ANALYSIS_TEMPERATURE}", "analysis")
-
-        # Show prompt preview
-        prompt_preview = prompt[:500] + "..." if len(prompt) > 500 else prompt
-        pipeline_logger.debug(session_id, f"Prompt preview:\n{prompt_preview}", "analysis")
-
         analysis = self.call_model(
             Config.ANALYSIS_MODEL,
             messages,
             max_tokens=Config.MAX_TOKENS_ANALYSIS,
-            temperature=Config.ANALYSIS_TEMPERATURE
+            temperature=Config.ANALYSIS_TEMPERATURE,
+            logger=logger
         )
-
-        pipeline_logger.success(session_id, f"✓ Analysis completed!", "analysis")
-        pipeline_logger.info(session_id, f"  Response length: {len(analysis)} characters", "analysis")
-        pipeline_logger.debug(session_id, f"  Response preview:\n{analysis[:300]}...", "analysis")
 
         # Extract new instruction if present
         new_instruction = ""
@@ -304,37 +222,26 @@ class AIPipeline:
             match = re.search(r'New Research Instruction:(.*?)(?=\n\n|\Z)', analysis, re.DOTALL)
             if match:
                 new_instruction = match.group(1).strip()
-                pipeline_logger.info(session_id, f"✓ Found new research instruction", "analysis")
-                pipeline_logger.info(session_id, f"  Instruction: {new_instruction[:100]}...", "analysis")
 
         return analysis, new_instruction
 
-    def run_template_generation(self, research_output: str, analysis_output: str) -> str:
+    def run_template_generation(self, research_output: str, analysis_output: str,
+                                logger: Optional[Callable[[str], None]] = None) -> str:
         """Stage 3: Enhanced Template Generation with File References"""
 
-        # Get session_id (should be set by run_pipeline)
-        session_id = getattr(self, '_current_session_id', str(uuid.uuid4()))
-
-        pipeline_logger.info(session_id, f"=== STAGE 3: TEMPLATE GENERATION ===", "template")
-        pipeline_logger.info(session_id, f"Research input length: {len(research_output)} characters", "template")
-        pipeline_logger.info(session_id, f"Analysis input length: {len(analysis_output)} characters", "template")
-
+        self._log(logger, "Stage 3: Template generation started")
         # Find similar templates for reference
         template_references = ""
         try:
             # Extract keywords from research for finding similar templates
             keywords = re.findall(r'\b\w+\b', research_output)[:10]
-            pipeline_logger.info(session_id, f"Searching for similar templates with keywords: {keywords[:5]}...", "template")
-
             similar_templates = self.file_manager.find_similar_templates(
                 ' '.join(keywords), max_results=3
             )
 
             if similar_templates:
-                pipeline_logger.info(session_id, f"Found {len(similar_templates)} similar templates for reference", "template")
                 template_references = "\n\n## Reference Templates:\n"
                 for template in similar_templates:
-                    pipeline_logger.info(session_id, f"  Reference: {template['query']}", "template")
                     template_references += f"\n**Similar Skill: {template['query']}**\n"
                     try:
                         content = self.file_manager.read_file(template['template_file'])
@@ -344,10 +251,9 @@ class AIPipeline:
                             template_references += f"  Metadata structure:\n  ```yaml\n{yaml_section[:200]}...\n```\n"
                     except:
                         template_references += "  (Template content unavailable)\n"
-            else:
-                pipeline_logger.info(session_id, "No similar templates found", 'template')
         except Exception as e:
-            pipeline_logger.warning(session_id, f"Failed to load similar templates: {str(e)}", "template")
+            self._log(logger, f"Failed to load similar templates: {str(e)}")
+            print(f"Failed to load similar templates: {str(e)}")
 
         # Build enhanced prompt with references
         prompt = (
@@ -384,90 +290,59 @@ class AIPipeline:
         )
 
         messages = [{"role": "user", "content": prompt}]
-
-        pipeline_logger.info(session_id, f"Calling template model: {Config.TEMPLATE_MODEL}", "template")
-        pipeline_logger.info(session_id, f"Max tokens: {Config.MAX_TOKENS_TEMPLATE}", "template")
-
-        # Show prompt preview
-        prompt_preview = prompt[:500] + "..." if len(prompt) > 500 else prompt
-        pipeline_logger.debug(session_id, f"Prompt preview:\n{prompt_preview}", "template")
-
-        result = self.call_model(
+        return self.call_model(
             Config.TEMPLATE_MODEL,
             messages,
-            max_tokens=Config.MAX_TOKENS_TEMPLATE
+            max_tokens=Config.MAX_TOKENS_TEMPLATE,
+            logger=logger
         )
 
-        pipeline_logger.success(session_id, f"✓ Template generation completed!", "template")
-        pipeline_logger.info(session_id, f"  Response length: {len(result)} characters", "template")
-        pipeline_logger.debug(session_id, f"  Response preview:\n{result[:300]}...", "template")
-
-        return result
-
-    def run_pipeline(self, query: str, session_id: str = None) -> PipelineState:
+    def run_pipeline(self, query: str, logger: Optional[Callable[[str], None]] = None,
+                     session_id: Optional[str] = None,
+                     timestamp: Optional[str] = None,
+                     stage_callback: Optional[Callable[[str], None]] = None) -> PipelineState:
         """Run the complete pipeline"""
 
-        state = PipelineState(query, session_id)
-        # Store session_id for use in stage methods
-        self._current_session_id = state.session_id
+        state = PipelineState(query, session_id=session_id, timestamp=timestamp)
 
-        pipeline_logger.info(state.session_id, "=" * 50, 'pipeline')
-        pipeline_logger.info(state.session_id, f"🚀 Starting AI Skills Pipeline", 'pipeline')
-        pipeline_logger.info(state.session_id, f"Session ID: {state.session_id}", 'pipeline')
-        pipeline_logger.info(state.session_id, f"Timestamp: {state.timestamp}", 'pipeline')
-        pipeline_logger.info(state.session_id, f"Initial Query: {query}", 'pipeline')
+        # Stage 1: Research
+        if stage_callback:
+            stage_callback("research")
+        state.research_output = self.run_research(query, logger=logger)
 
-        try:
-            # Stage 1: Research
-            pipeline_logger.info(state.session_id, "\n" + "="*30 + " STAGE 1: RESEARCH " + "="*30, 'pipeline')
-            state.research_output = self.run_research(query)
-            if not state.research_output:
-                raise Exception("Research stage returned empty result")
+        # Stage 2: Analysis
+        if stage_callback:
+            stage_callback("analysis")
+        state.analysis_output, state.new_instruction = self.run_analysis(
+            state.research_output,
+            logger=logger
+        )
 
-            # Stage 2: Analysis
-            pipeline_logger.info(state.session_id, "\n" + "="*30 + " STAGE 2: ANALYSIS " + "="*30, 'pipeline')
-            state.analysis_output, state.new_instruction = self.run_analysis(state.research_output)
-            if not state.analysis_output:
-                raise Exception("Analysis stage returned empty result")
+        # Stage 3: Template Generation
+        if stage_callback:
+            stage_callback("template")
+        state.template_output = self.run_template_generation(
+            state.research_output,
+            state.analysis_output,
+            logger=logger
+        )
 
-            # Stage 3: Template Generation
-            pipeline_logger.info(state.session_id, "\n" + "="*30 + " STAGE 3: TEMPLATE " + "="*30, 'pipeline')
-            state.template_output = self.run_template_generation(
-                state.research_output,
-                state.analysis_output
-            )
-            if not state.template_output:
-                raise Exception("Template generation stage returned empty result")
+        state.iteration_count = 1
 
-            state.iteration_count = 1
+        # Save initial state to history
+        state.history.append({
+            'iteration': 1,
+            'research': state.research_output,
+            'analysis': state.analysis_output,
+            'template': state.template_output,
+            'instruction': state.new_instruction
+        })
 
-            # Save initial state to history
-            state.history.append({
-                'iteration': 1,
-                'research': state.research_output,
-                'analysis': state.analysis_output,
-                'template': state.template_output,
-                'instruction': state.new_instruction
-            })
+        return state
 
-            pipeline_logger.success(state.session_id, "\n✅ Pipeline completed successfully!", 'pipeline')
-            pipeline_logger.info(state.session_id, f"  Total iterations: {state.iteration_count}", 'pipeline')
-            pipeline_logger.info(state.session_id, f"  Research length: {len(state.research_output)} chars", 'pipeline')
-            pipeline_logger.info(state.session_id, f"  Analysis length: {len(state.analysis_output)} chars", 'pipeline')
-            pipeline_logger.info(state.session_id, f"  Template length: {len(state.template_output)} chars", 'pipeline')
-            if state.new_instruction:
-                pipeline_logger.info(state.session_id, f"  New instruction available: Yes", 'pipeline')
-
-            return state
-
-        except Exception as e:
-            pipeline_logger.error(state.session_id, f"\n❌ Pipeline failed: {str(e)}", 'pipeline')
-            pipeline_logger.error(state.session_id, f"  Error type: {type(e).__name__}", 'pipeline')
-            import traceback
-            pipeline_logger.error(state.session_id, f"  Traceback:\n{traceback.format_exc()}", 'pipeline')
-            raise
-
-    def run_iteration(self, state: PipelineState) -> PipelineState:
+    def run_iteration(self, state: PipelineState,
+                      logger: Optional[Callable[[str], None]] = None,
+                      stage_callback: Optional[Callable[[str], None]] = None) -> PipelineState:
         """Run an iteration of the pipeline"""
 
         if state.iteration_count >= Config.MAX_ITERATIONS:
@@ -480,16 +355,27 @@ class AIPipeline:
         new_query = state.new_instruction
 
         # Run research with new instruction
-        new_research = self.run_research(new_query)
+        if stage_callback:
+            stage_callback("research")
+        new_research = self.run_research(new_query, logger=logger)
 
         # Run analysis with previous analysis as context
+        if stage_callback:
+            stage_callback("analysis")
         new_analysis, new_instruction = self.run_analysis(
             new_research,
-            state.analysis_output
+            state.analysis_output,
+            logger=logger
         )
 
         # Generate new template
-        new_template = self.run_template_generation(new_research, new_analysis)
+        if stage_callback:
+            stage_callback("template")
+        new_template = self.run_template_generation(
+            new_research,
+            new_analysis,
+            logger=logger
+        )
 
         # Update state
         state.iteration_count += 1

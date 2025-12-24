@@ -1,14 +1,16 @@
 import os
-import threading
+import json
+import queue
 from datetime import datetime
-from flask import Flask, request, jsonify, render_template, send_file, redirect, url_for
-from werkzeug.exceptions import BadRequest, NotFound, InternalServerError, HTTPException
+from threading import Thread
+
+from flask import Flask, request, jsonify, render_template, send_file, redirect, url_for, Response, stream_with_context
+from werkzeug.exceptions import BadRequest, NotFound, InternalServerError
 
 from config import Config
 from pipeline import AIPipeline, PipelineState
 from utils.file_manager import FileManager
 from utils.export import ExportManager
-from utils.logger import pipeline_logger, LogLevel
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -20,16 +22,11 @@ pipeline = None
 # In-memory storage for active sessions (for development)
 # In production, use Redis or proper session storage
 active_sessions = {}
+session_status = {}
+session_logs = {}
+session_log_queues = {}
+LOG_BUFFER_LIMIT = 500
 
-def _sync_output_dir():
-    """Keep Config.SKILLS_OUTPUT_DIR aligned with Flask app config."""
-    output_dir = app.config.get('SKILLS_OUTPUT_DIR')
-    if output_dir and output_dir != Config.SKILLS_OUTPUT_DIR:
-        Config.SKILLS_OUTPUT_DIR = output_dir
-
-@app.before_request
-def _sync_config_from_app():
-    _sync_output_dir()
 
 def get_pipeline():
     """Get or create pipeline instance"""
@@ -43,8 +40,53 @@ def get_pipeline():
 def get_session_state(session_id: str) -> PipelineState:
     """Get or create session state"""
     if session_id not in active_sessions:
+        if session_id in session_status:
+            raise BadRequest("Session not ready")
         raise BadRequest("Invalid session ID")
     return active_sessions[session_id]
+
+
+def init_session_logging(session_id: str) -> None:
+    session_logs[session_id] = []
+    session_log_queues[session_id] = queue.Queue()
+
+
+def append_session_log(session_id: str, message: str) -> None:
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "message": message
+    }
+    session_logs[session_id].append(entry)
+    if len(session_logs[session_id]) > LOG_BUFFER_LIMIT:
+        session_logs[session_id] = session_logs[session_id][-LOG_BUFFER_LIMIT:]
+    session_log_queues[session_id].put(entry)
+
+
+def create_session_logger(session_id: str):
+    def _logger(message: str) -> None:
+        append_session_log(session_id, message)
+    return _logger
+
+
+def update_session_status(session_id: str, status: str = None,
+                          stage: str = None, error: str = None) -> None:
+    info = session_status.get(session_id)
+    if not info:
+        return
+    if status is not None:
+        info["status"] = status
+    if stage is not None:
+        info["stage"] = stage
+    if error is not None:
+        info["error"] = error
+    info["updated_at"] = datetime.now().isoformat()
+
+
+def handle_api_exception(context: str, error: Exception):
+    if isinstance(error, (BadRequest, NotFound)):
+        raise error
+    app.logger.error(f"{context} error: {str(error)}")
+    raise InternalServerError(str(error))
 
 
 @app.route('/')
@@ -87,62 +129,58 @@ def api_pipeline_start():
         # Generate session ID
         import uuid
         session_id = str(uuid.uuid4())
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-        # Create initial state
-        state = PipelineState(query, session_id)
-        active_sessions[session_id] = state
+        session_status[session_id] = {
+            "status": "queued",
+            "stage": "queued",
+            "query": query,
+            "timestamp": timestamp,
+            "error": None,
+            "started_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }
+        init_session_logging(session_id)
 
-        # Store session_id for logging
-        pipe = get_pipeline()
-        pipe._current_session_id = session_id
+        def stage_callback(stage: str) -> None:
+            update_session_status(session_id, stage=stage)
+            append_session_log(session_id, f"Stage: {stage}")
 
-        is_test_request = (
-            app.testing
-            or app.config.get('TESTING')
-            or request.environ.get('werkzeug.test')
-            or os.environ.get('PYTEST_CURRENT_TEST') is not None
-        )
-        if is_test_request:
-            # Run synchronously during tests for deterministic responses.
-            result_state = pipe.run_pipeline(query, session_id)
-            active_sessions[session_id] = result_state
-            FileManager.save_pipeline_state(result_state)
-        else:
-            # Run pipeline in background thread (non-blocking)
-            def run_pipeline_background():
-                try:
-                    result_state = pipe.run_pipeline(query, session_id)
-                    # Update session with completed state
-                    active_sessions[session_id] = result_state
-                    # Save to file system
-                    FileManager.save_pipeline_state(result_state)
-                except Exception as e:
-                    pipeline_logger.error(session_id, f"Pipeline execution failed: {str(e)}", "pipeline")
-                    active_sessions[session_id].research_output = f"ERROR: {str(e)}"
+        def run_pipeline_async() -> None:
+            logger = create_session_logger(session_id)
+            try:
+                update_session_status(session_id, status="running", stage="research")
+                logger("Pipeline started")
+                pipe = get_pipeline()
+                state = pipe.run_pipeline(
+                    query,
+                    logger=logger,
+                    session_id=session_id,
+                    timestamp=timestamp,
+                    stage_callback=stage_callback
+                )
+                # Save to file system
+                FileManager.save_pipeline_state(state)
+                # Store in session
+                active_sessions[session_id] = state
+                update_session_status(session_id, status="completed", stage="completed")
+                logger("Pipeline completed")
+            except Exception as e:
+                update_session_status(session_id, status="error", stage="error", error=str(e))
+                logger(f"Pipeline error: {str(e)}")
 
-            thread = threading.Thread(target=run_pipeline_background, daemon=True)
-            thread.start()
+        Thread(target=run_pipeline_async, daemon=True).start()
 
-        # Return immediately with session info
-        response_state = active_sessions[session_id] if is_test_request else state
         return jsonify({
             'session_id': session_id,
-            'timestamp': response_state.timestamp,
-            'query': response_state.query,
-            'iteration_count': response_state.iteration_count,
-            'research_output': response_state.research_output,
-            'analysis_output': response_state.analysis_output,
-            'template_output': response_state.template_output,
-            'new_instruction': response_state.new_instruction,
-            'history': response_state.history,
-            'can_iterate': False
-        })
+            'timestamp': timestamp,
+            'query': query,
+            'status': session_status[session_id]["status"],
+            'stage': session_status[session_id]["stage"]
+        }), 202
 
     except Exception as e:
-        app.logger.error(f"Pipeline start error: {str(e)}")
-        if isinstance(e, HTTPException):
-            raise
-        raise InternalServerError(str(e))
+        handle_api_exception("Pipeline start", e)
 
 
 @app.route('/api/pipeline/iterate', methods=['POST'])
@@ -163,82 +201,119 @@ def api_pipeline_iterate():
         if not state.new_instruction:
             raise BadRequest("No instruction available for iteration")
 
-        # Run iteration
-        pipe = get_pipeline()
-        # Set session_id for logging in iteration
-        pipe._current_session_id = session_id
-        state = pipe.run_iteration(state)
+        def stage_callback(stage: str) -> None:
+            update_session_status(session_id, stage=stage)
+            append_session_log(session_id, f"Stage: {stage}")
 
-        # Save to file system
-        FileManager.save_pipeline_state(state)
+        def run_iteration_async() -> None:
+            logger = create_session_logger(session_id)
+            try:
+                update_session_status(session_id, status="running", stage="research")
+                logger("Iteration started")
+                pipe = get_pipeline()
+                updated_state = pipe.run_iteration(
+                    state,
+                    logger=logger,
+                    stage_callback=stage_callback
+                )
+                # Save to file system
+                FileManager.save_pipeline_state(updated_state)
+                # Update session
+                active_sessions[session_id] = updated_state
+                update_session_status(session_id, status="completed", stage="completed")
+                logger("Iteration completed")
+            except Exception as e:
+                update_session_status(session_id, status="error", stage="error", error=str(e))
+                logger(f"Iteration error: {str(e)}")
 
-        # Update session
-        active_sessions[session_id] = state
+        Thread(target=run_iteration_async, daemon=True).start()
 
         return jsonify({
             'session_id': session_id,
-            'timestamp': state.timestamp,
-            'iteration_count': state.iteration_count,
-            'research_output': state.research_output,
-            'analysis_output': state.analysis_output,
-            'template_output': state.template_output,
-            'new_instruction': state.new_instruction,
-            'can_iterate': bool(state.new_instruction and state.iteration_count < Config.MAX_ITERATIONS)
-        })
+            'status': session_status.get(session_id, {}).get("status"),
+            'stage': session_status.get(session_id, {}).get("stage")
+        }), 202
 
     except Exception as e:
-        app.logger.error(f"Pipeline iteration error: {str(e)}")
-        if isinstance(e, HTTPException):
-            raise
-        raise InternalServerError(str(e))
+        handle_api_exception("Pipeline iteration", e)
 
 
-@app.route('/api/pipeline/status/<session_id>')
-def api_pipeline_status(session_id: str):
-    """Get current pipeline status"""
+@app.route('/api/pipeline/status')
+def api_pipeline_status():
+    """Get pipeline status for a session"""
     try:
-        if session_id not in active_sessions:
-            raise NotFound("Session not found")
-        
-        state = active_sessions[session_id]
-        
-        # Determine current stage based on what's been completed
-        current_stage = "initializing"
-        if state.template_output:
-            current_stage = "completed"
-        elif state.analysis_output:
-            current_stage = "generating_template"
-        elif state.research_output:
-            current_stage = "analyzing"
-        else:
-            current_stage = "researching"
-        
-        return jsonify({
+        session_id = request.args.get('session_id')
+        if not session_id:
+            raise BadRequest("Session ID is required")
+
+        if session_id not in session_status:
+            raise BadRequest("Invalid session ID")
+
+        status_info = session_status[session_id]
+        state = active_sessions.get(session_id)
+
+        response = {
             'session_id': session_id,
-            'timestamp': state.timestamp,
-            'current_stage': current_stage,
-            'iteration_count': state.iteration_count,
-            'has_research': bool(state.research_output),
-            'has_analysis': bool(state.analysis_output),
-            'has_template': bool(state.template_output),
-            'research_output': state.research_output,
-            'analysis_output': state.analysis_output,
-            'template_output': state.template_output,
-            'new_instruction': state.new_instruction,
-            'can_iterate': bool(state.new_instruction and state.iteration_count < Config.MAX_ITERATIONS)
-        })
-    
+            'status': status_info.get('status'),
+            'stage': status_info.get('stage'),
+            'error': status_info.get('error'),
+            'timestamp': status_info.get('timestamp'),
+            'query': status_info.get('query'),
+            'iteration_count': state.iteration_count if state else 0,
+            'research_output': state.research_output if state else "",
+            'analysis_output': state.analysis_output if state else "",
+            'template_output': state.template_output if state else "",
+            'new_instruction': state.new_instruction if state else "",
+            'can_iterate': bool(state and state.new_instruction and state.iteration_count < Config.MAX_ITERATIONS)
+        }
+
+        return jsonify(response)
+
     except Exception as e:
-        app.logger.error(f"Pipeline status error: {str(e)}")
-        if isinstance(e, HTTPException):
-            raise
-        raise InternalServerError(str(e))
+        handle_api_exception("Pipeline status", e)
 
 
-@app.route('/api/template/<timestamp>')
-def api_get_template(timestamp: str):
-    """Get template content"""
+@app.route('/api/pipeline/logs')
+def api_pipeline_logs():
+    """Stream pipeline logs via SSE"""
     try:
+        session_id = request.args.get('session_id')
+        if not session_id:
+            raise BadRequest("Session ID is required")
+
+        if session_id not in session_logs:
+            raise BadRequest("Invalid session ID")
+
+        def stream():
+            # Send existing log buffer first
+            for entry in session_logs.get(session_id, []):
+                yield f"data: {json.dumps(entry)}\n\n"
+
+            log_queue = session_log_queues.get(session_id)
+            while True:
+                try:
+                    entry = log_queue.get(timeout=30)
+                except queue.Empty:
+                    yield "event: ping\ndata: {}\n\n"
+                    continue
+                yield f"data: {json.dumps(entry)}\n\n"
+
+        return Response(stream_with_context(stream()), mimetype='text/event-stream')
+
+    except Exception as e:
+        handle_api_exception("Pipeline log stream", e)
+
+
+@app.route('/api/template/<timestamp>', methods=['GET', 'DELETE'])
+def api_template(timestamp: str):
+    """Get or delete template content"""
+    try:
+        if request.method == 'DELETE':
+            success = FileManager.delete_run(timestamp)
+            if not success:
+                raise NotFound("Template not found")
+            return jsonify({'success': True})
+
         metadata = FileManager.load_pipeline_state(timestamp)
         if not metadata:
             raise NotFound("Template not found")
@@ -253,10 +328,7 @@ def api_get_template(timestamp: str):
         })
 
     except Exception as e:
-        app.logger.error(f"Get template error: {str(e)}")
-        if isinstance(e, HTTPException):
-            raise
-        raise InternalServerError(str(e))
+        handle_api_exception("Get template", e)
 
 
 @app.route('/api/template/<timestamp>/save', methods=['POST'])
@@ -267,7 +339,8 @@ def api_save_template(timestamp: str):
         if not data or 'content' not in data:
             raise BadRequest("Content is required")
 
-        if not FileManager.load_skill_template(timestamp):
+        metadata = FileManager.load_pipeline_state(timestamp)
+        if not metadata:
             raise NotFound("Template not found")
 
         success = FileManager.save_edited_template(timestamp, data['content'])
@@ -277,10 +350,7 @@ def api_save_template(timestamp: str):
         return jsonify({'success': True})
 
     except Exception as e:
-        app.logger.error(f"Save template error: {str(e)}")
-        if isinstance(e, HTTPException):
-            raise
-        raise InternalServerError(str(e))
+        handle_api_exception("Save template", e)
 
 
 @app.route('/api/template/<timestamp>/export')
@@ -308,10 +378,7 @@ def api_export_template(timestamp: str):
         )
 
     except Exception as e:
-        app.logger.error(f"Export template error: {str(e)}")
-        if isinstance(e, HTTPException):
-            raise
-        raise InternalServerError(str(e))
+        handle_api_exception("Export template", e)
 
 
 @app.route('/api/templates')
@@ -322,13 +389,9 @@ def api_list_templates():
         return jsonify({'templates': templates})
 
     except Exception as e:
-        app.logger.error(f"List templates error: {str(e)}")
-        if isinstance(e, HTTPException):
-            raise
-        raise InternalServerError(str(e))
+        handle_api_exception("List templates", e)
 
 
-@app.route('/api/template/<timestamp>', methods=['DELETE'])
 @app.route('/api/template/<timestamp>/delete', methods=['DELETE'])
 def api_delete_template(timestamp: str):
     """Delete a template and all its files"""
@@ -340,10 +403,7 @@ def api_delete_template(timestamp: str):
         return jsonify({'success': True})
 
     except Exception as e:
-        app.logger.error(f"Delete template error: {str(e)}")
-        if isinstance(e, HTTPException):
-            raise
-        raise InternalServerError(str(e))
+        handle_api_exception("Delete template", e)
 
 
 @app.route('/api/templates/export', methods=['POST'])
@@ -369,50 +429,8 @@ def api_export_multiple():
         )
 
     except Exception as e:
-        app.logger.error(f"Export multiple error: {str(e)}")
-        if isinstance(e, HTTPException):
-            raise
-        raise InternalServerError(str(e))
+        handle_api_exception("Export multiple", e)
 
-
-# Console Log API Routes
-
-@app.route('/api/logs/<session_id>')
-def api_get_logs(session_id: str):
-    """Get logs for a specific session"""
-    try:
-        since = request.args.get('since', type=float)
-        logs = pipeline_logger.get_recent_logs(session_id, since)
-        return jsonify({'logs': logs})
-    except Exception as e:
-        app.logger.error(f"Get logs error: {str(e)}")
-        if isinstance(e, HTTPException):
-            raise
-        raise InternalServerError(str(e))
-
-
-@app.route('/api/logs/<session_id>/stream')
-def api_stream_logs(session_id: str):
-    """Stream logs for a session (Server-Sent Events)"""
-    from flask import Response
-    import json
-    import time
-
-    def generate():
-        last_timestamp = None
-        while True:
-            logs = pipeline_logger.get_recent_logs(session_id, last_timestamp)
-            if logs:
-                for log in logs:
-                    yield f"data: {json.dumps(log)}\n\n"
-                    last_timestamp = datetime.fromisoformat(log['timestamp']).timestamp()
-            time.sleep(0.2)  # Poll every 200ms for more responsive updates
-
-    return Response(generate(), mimetype='text/event-stream', headers={
-        'Cache-Control': 'no-cache',
-        'X-Accel-Buffering': 'no',
-        'Connection': 'keep-alive'
-    })
 
 # Error Handlers
 
