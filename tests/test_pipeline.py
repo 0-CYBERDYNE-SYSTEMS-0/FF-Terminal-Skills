@@ -45,7 +45,10 @@ class TestPipelineState(unittest.TestCase):
             'analysis_output': 'Analysis',
             'template_output': 'Template',
             'new_instruction': 'New instruction',
-            'history': [{"test": "data"}]
+            'history': [{"test": "data"}],
+            'skill_name': "",
+            'bundle_tree': "",
+            'bundle_root': ""
         }
 
         self.assertEqual(result, expected)

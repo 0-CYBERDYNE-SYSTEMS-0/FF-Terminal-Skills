@@ -204,15 +204,19 @@ class TestFlaskApp(unittest.TestCase):
         timestamp = "2023-01-01_00-00-00"
         template_dir = os.path.join(self.temp_dir, timestamp)
         os.makedirs(template_dir)
+        bundle_dir = os.path.join(template_dir, "test-skill")
+        os.makedirs(bundle_dir)
 
         # Create skill.md and metadata.json
-        with open(os.path.join(template_dir, 'skill.md'), 'w') as f:
+        with open(os.path.join(bundle_dir, 'SKILL.md'), 'w') as f:
             f.write('Test template content')
 
         metadata = {
             'query': 'Test query',
             'iteration_count': 1,
-            'created_at': '2023-01-01T00:00:00'
+            'created_at': '2023-01-01T00:00:00',
+            'skill_name': 'test-skill',
+            'bundle_tree': 'test-skill/\\n└── SKILL.md'
         }
         with open(os.path.join(template_dir, 'metadata.json'), 'w') as f:
             json.dump(metadata, f)
@@ -223,6 +227,7 @@ class TestFlaskApp(unittest.TestCase):
         data = json.loads(response.data)
         self.assertEqual(data['content'], 'Test template content')
         self.assertEqual(data['metadata']['query'], 'Test query')
+        self.assertEqual(data['skill_name'], 'test-skill')
 
     def test_api_save_template_not_found(self):
         """Test saving non-existent template"""
@@ -237,15 +242,18 @@ class TestFlaskApp(unittest.TestCase):
         timestamp = "2023-01-01_00-00-00"
         template_dir = os.path.join(self.temp_dir, timestamp)
         os.makedirs(template_dir)
+        bundle_dir = os.path.join(template_dir, "test-skill")
+        os.makedirs(bundle_dir)
 
-        skill_file = os.path.join(template_dir, 'skill.md')
+        skill_file = os.path.join(bundle_dir, 'SKILL.md')
         with open(skill_file, 'w') as f:
             f.write('Original content')
 
         metadata = {
             'query': 'Test query',
             'iteration_count': 1,
-            'created_at': '2023-01-01T00:00:00'
+            'created_at': '2023-01-01T00:00:00',
+            'skill_name': 'test-skill'
         }
         with open(os.path.join(template_dir, 'metadata.json'), 'w') as f:
             json.dump(metadata, f)
@@ -259,8 +267,16 @@ class TestFlaskApp(unittest.TestCase):
         self.assertTrue(response.json['success'])
 
         # Verify file was updated
-        with open(skill_file, 'r') as f:
-            self.assertEqual(f.read(), 'Updated content')
+        with open(os.path.join(template_dir, 'metadata.json'), 'r') as f:
+            updated_metadata = json.load(f)
+        updated_skill = os.path.join(
+            template_dir,
+            updated_metadata['skill_name'],
+            'SKILL.md'
+        )
+        with open(updated_skill, 'r') as f:
+            saved = f.read()
+            self.assertIn('Updated content', saved)
 
     def test_api_list_templates_empty(self):
         """Test listing templates when none exist"""

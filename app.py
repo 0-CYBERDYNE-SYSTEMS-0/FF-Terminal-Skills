@@ -264,7 +264,9 @@ def api_pipeline_status():
             'analysis_output': state.analysis_output if state else "",
             'template_output': state.template_output if state else "",
             'new_instruction': state.new_instruction if state else "",
-            'can_iterate': bool(state and state.new_instruction and state.iteration_count < Config.MAX_ITERATIONS)
+            'can_iterate': bool(state and state.new_instruction and state.iteration_count < Config.MAX_ITERATIONS),
+            'skill_name': state.skill_name if state else "",
+            'bundle_tree': state.bundle_tree if state else ""
         }
 
         return jsonify(response)
@@ -324,7 +326,9 @@ def api_template(timestamp: str):
 
         return jsonify({
             'metadata': metadata,
-            'content': template_content
+            'content': template_content,
+            'skill_name': metadata.get('skill_name', ''),
+            'bundle_tree': metadata.get('bundle_tree', '')
         })
 
     except Exception as e:
@@ -362,13 +366,16 @@ def api_export_template(timestamp: str):
             raise NotFound("Template not found")
 
         # Create export
-        export_type = request.args.get('type', 'template')
+        export_type = request.args.get('type', 'bundle')
         if export_type == 'full':
             zip_buffer = ExportManager.create_full_export(timestamp)
             filename = f"pipeline_full_{timestamp}.zip"
+        elif export_type in ('template', 'skill'):
+            zip_buffer = ExportManager.create_skill_export(timestamp)
+            filename = f"{metadata.get('skill_name', 'skill')}_SKILL.zip"
         else:
-            zip_buffer = ExportManager.create_template_export(timestamp)
-            filename = f"skill_template_{timestamp}.zip"
+            zip_buffer = ExportManager.create_bundle_export(timestamp)
+            filename = f"{metadata.get('skill_name', 'skill')}_bundle.zip"
 
         return send_file(
             zip_buffer,

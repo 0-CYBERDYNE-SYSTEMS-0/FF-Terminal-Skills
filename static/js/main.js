@@ -15,7 +15,8 @@ const resultsSection = document.querySelector('.results-section');
 const iterationCount = document.getElementById('iterationCount');
 const timestampEl = document.getElementById('timestamp');
 const previewBtn = document.getElementById('previewBtn');
-const exportBtn = document.getElementById('exportBtn');
+const exportSkillBtn = document.getElementById('exportSkillBtn');
+const exportBundleBtn = document.getElementById('exportBundleBtn');
 const refreshBtn = document.getElementById('refreshBtn');
 const templatesList = document.getElementById('templatesList');
 
@@ -33,7 +34,8 @@ const errorMessage = document.getElementById('errorMessage');
 startBtn.addEventListener('click', startPipeline);
 iterateBtn.addEventListener('click', iteratePipeline);
 previewBtn.addEventListener('click', openPreview);
-exportBtn.addEventListener('click', exportTemplate);
+exportSkillBtn.addEventListener('click', exportSkill);
+exportBundleBtn.addEventListener('click', exportBundle);
 refreshBtn.addEventListener('click', loadTemplates);
 
 // Tab switching
@@ -161,11 +163,19 @@ function updateResults(data) {
     iterateBtn.disabled = !canIterate;
     iterateBtn.textContent = canIterate ? 'Iterate' : 'Max iterations reached';
 
-    // Update export button
+    // Update export buttons
     if (currentTimestamp) {
-        exportBtn.onclick = () => {
-            window.open(`/api/template/${currentTimestamp}/export`, '_blank');
+        exportSkillBtn.onclick = () => {
+            window.open(`/api/template/${currentTimestamp}/export?type=skill`, '_blank');
         };
+        exportBundleBtn.onclick = () => {
+            window.open(`/api/template/${currentTimestamp}/export?type=bundle`, '_blank');
+        };
+    }
+
+    const bundleTreeEl = document.getElementById('bundleTree');
+    if (bundleTreeEl) {
+        bundleTreeEl.textContent = data.bundle_tree || 'Bundle not available yet.';
     }
 
     // Switch to template tab
@@ -289,27 +299,14 @@ function openPreview() {
     }
 }
 
-async function exportTemplate() {
+function exportSkill() {
     if (!currentTimestamp) return;
+    window.open(`/api/template/${currentTimestamp}/export?type=skill`, '_blank');
+}
 
-    try {
-        const response = await fetch(`/api/template/${currentTimestamp}/export`);
-        if (!response.ok) throw new Error('Export failed');
-
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `skill_template_${currentTimestamp}.zip`;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-
-        showSuccess('Template exported successfully!');
-    } catch (error) {
-        showError(error.message);
-    }
+function exportBundle() {
+    if (!currentTimestamp) return;
+    window.open(`/api/template/${currentTimestamp}/export?type=bundle`, '_blank');
 }
 
 async function loadTemplates() {
@@ -341,7 +338,7 @@ function renderTemplates(templates) {
             </div>
             <div class="actions">
                 <a href="/preview/${template.timestamp}" class="btn btn-small btn-outline">Preview</a>
-                <a href="/api/template/${template.timestamp}/export" class="btn btn-small btn-outline" target="_blank">Export</a>
+                <a href="/api/template/${template.timestamp}/export?type=bundle" class="btn btn-small btn-outline" target="_blank">Export Bundle</a>
             </div>
         </div>
     `).join('');

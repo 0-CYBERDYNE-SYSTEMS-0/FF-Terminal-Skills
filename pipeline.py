@@ -24,6 +24,9 @@ class PipelineState:
         self.template_output = ""
         self.new_instruction = ""
         self.history = []
+        self.skill_name = ""
+        self.bundle_tree = ""
+        self.bundle_root = ""
 
     def to_dict(self) -> Dict:
         """Convert state to dictionary for storage"""
@@ -36,7 +39,10 @@ class PipelineState:
             'analysis_output': self.analysis_output,
             'template_output': self.template_output,
             'new_instruction': self.new_instruction,
-            'history': self.history
+            'history': self.history,
+            'skill_name': self.skill_name,
+            'bundle_tree': self.bundle_tree,
+            'bundle_root': self.bundle_root
         }
 
 
