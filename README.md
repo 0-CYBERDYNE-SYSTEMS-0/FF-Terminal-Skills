@@ -110,15 +110,15 @@ Generated templates are stored in `skills_output/` with the following structure:
 
 ```
 skills_output/
-└── YYYY-MM-DD_HH-MM-SS/
-    ├── skill.md              # Final template
-    ├── metadata.json         # Pipeline information
-    ├── iteration_1/          # First iteration
-    │   ├── research.md
-    │   ├── analysis.md
-    │   ├── template.md
-    │   └── instruction.txt
-    └── iteration_2/          # Second iteration (if applicable)
+ YYYY-MM-DD_HH-MM-SS/
+     skill.md              # Final template
+     metadata.json         # Pipeline information
+     iteration_1/          # First iteration
+        research.md
+        analysis.md
+        template.md
+        instruction.txt
+     iteration_2/          # Second iteration (if applicable)
 ```
 
 ## API Reference
@@ -215,15 +215,15 @@ uv run pre-commit run --all-files
 
 ```
 skills_FFT/
-├── app.py                 # Main Flask application
-├── config.py              # Configuration management
-├── pipeline.py            # Pipeline logic
-├── requirements.txt       # Python dependencies
-├── templates/             # Jinja2 HTML templates
-├── static/                # CSS, JavaScript, images
-├── utils/                 # Utility modules
-├── tests/                 # Test files
-└── skills_output/         # Generated templates (git-ignored)
+ app.py                 # Main Flask application
+ config.py              # Configuration management
+ pipeline.py            # Pipeline logic
+ requirements.txt       # Python dependencies
+ templates/             # Jinja2 HTML templates
+ static/                # CSS, JavaScript, images
+ utils/                 # Utility modules
+ tests/                 # Test files
+ skills_output/         # Generated templates (git-ignored)
 ```
 
 ### Adding New Models
