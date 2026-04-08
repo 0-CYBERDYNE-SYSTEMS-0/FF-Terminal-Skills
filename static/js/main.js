@@ -15,17 +15,22 @@ const resultsSection = document.querySelector('.results-section');
 const iterationCount = document.getElementById('iterationCount');
 const timestampEl = document.getElementById('timestamp');
 const previewBtn = document.getElementById('previewBtn');
-const exportBtn = document.getElementById('exportBtn');
+const exportSkillBtn = document.getElementById('exportSkillBtn');
+const exportBundleBtn = document.getElementById('exportBundleBtn');
 const refreshBtn = document.getElementById('refreshBtn');
 const templatesList = document.getElementById('templatesList');
+
+// Process stream elements
+const processStream = document.getElementById('processStream');
+const currentStageEl = document.getElementById('currentStage');
+const progressFill = document.getElementById('progressFill');
+const logStream = document.getElementById('logStream');
 
 // Tab elements
 const tabBtns = document.querySelectorAll('.tab-btn');
 const tabPanes = document.querySelectorAll('.tab-pane');
 
-// Modal elements
-const loadingModal = document.getElementById('loadingModal');
-const loadingText = document.getElementById('loadingText');
+// Error modal elements (keeping for errors)
 const errorModal = document.getElementById('errorModal');
 const errorMessage = document.getElementById('errorMessage');
 
@@ -33,7 +38,8 @@ const errorMessage = document.getElementById('errorMessage');
 startBtn.addEventListener('click', startPipeline);
 iterateBtn.addEventListener('click', iteratePipeline);
 previewBtn.addEventListener('click', openPreview);
-exportBtn.addEventListener('click', exportTemplate);
+exportSkillBtn.addEventListener('click', exportSkill);
+exportBundleBtn.addEventListener('click', exportBundle);
 refreshBtn.addEventListener('click', loadTemplates);
 
 // Tab switching
@@ -62,11 +68,16 @@ async function startPipeline() {
         return;
     }
 
-    setLoading('Running pipeline...');
+    // Show process stream
+    showProcessStream();
+    updateStage('Initializing pipeline...');
+    updateProgress(0);
     disableButtons(true);
-    clearLogOutput();
-    resultsSection.style.display = 'block';
-    switchTab('logs');
+    clearProcessLog();
+
+    // Add initial log entry
+    addLogEntry('Starting AI skill generation pipeline...', 'info');
+    addLogEntry(`Query: "${query}"`, 'info');
 
     try {
         const response = await fetch('/api/pipeline/start', {
@@ -96,10 +107,8 @@ async function startPipeline() {
         showError(error.message);
         stopStatusPolling();
         stopLogStream();
-        setLoading(false);
+        hideProcessStream();
         disableButtons(false);
-    } finally {
-        // Loading state is managed by status polling
     }
 }
 
@@ -109,10 +118,15 @@ async function iteratePipeline() {
         return;
     }
 
-    setLoading('Running iteration...');
+    // Show process stream
+    showProcessStream();
+    updateStage('Running iteration...');
+    updateProgress(0);
     disableButtons(true);
-    resultsSection.style.display = 'block';
-    switchTab('logs');
+    clearProcessLog();
+
+    // Add iteration log entry
+    addLogEntry('Starting pipeline iteration...', 'info');
 
     try {
         const response = await fetch('/api/pipeline/iterate', {
@@ -137,10 +151,8 @@ async function iteratePipeline() {
         showError(error.message);
         stopStatusPolling();
         stopLogStream();
-        setLoading(false);
+        hideProcessStream();
         disableButtons(false);
-    } finally {
-        // Loading state is managed by status polling
     }
 }
 
@@ -161,11 +173,19 @@ function updateResults(data) {
     iterateBtn.disabled = !canIterate;
     iterateBtn.textContent = canIterate ? 'Iterate' : 'Max iterations reached';
 
-    // Update export button
+    // Update export buttons
     if (currentTimestamp) {
-        exportBtn.onclick = () => {
-            window.open(`/api/template/${currentTimestamp}/export`, '_blank');
+        exportSkillBtn.onclick = () => {
+            window.open(`/api/template/${currentTimestamp}/export?type=skill`, '_blank');
         };
+        exportBundleBtn.onclick = () => {
+            window.open(`/api/template/${currentTimestamp}/export?type=bundle`, '_blank');
+        };
+    }
+
+    const bundleTreeEl = document.getElementById('bundleTree');
+    if (bundleTreeEl) {
+        bundleTreeEl.textContent = data.bundle_tree || 'Bundle not available yet.';
     }
 
     // Switch to template tab
@@ -184,15 +204,16 @@ async function pollStatus() {
         }
 
         if (data.status === 'running' || data.status === 'queued') {
-            const stageLabel = data.stage ? `Stage: ${data.stage}` : 'Processing...';
-            setLoading(stageLabel);
+            // Update stage and progress based on pipeline stage
+            updateStageFromPipeline(data.stage);
             return;
         }
 
         if (data.status === 'error') {
             stopStatusPolling();
             stopLogStream();
-            setLoading(false);
+            addLogEntry('Pipeline failed: ' + (data.error || 'Unknown error'), 'error');
+            hideProcessStream();
             disableButtons(false);
             showError(data.error || 'Pipeline failed');
             return;
@@ -201,16 +222,33 @@ async function pollStatus() {
         if (data.status === 'completed') {
             stopStatusPolling();
             stopLogStream();
-            setLoading(false);
+            updateStage('Complete!', 100);
+            addLogEntry('Pipeline completed successfully! Your AI skill is ready.', 'success');
+
+            // Hide process stream after a delay
+            setTimeout(() => {
+                hideProcessStream();
+                resultsSection.style.display = 'block';
+                switchTab('template');
+                // Show chat interface for refinement
+                showChatInterface();
+            }, 2000);
+
             canIterate = data.can_iterate;
             updateResults(data);
             showSuccess('Pipeline completed successfully!');
             loadTemplates();
             disableButtons(false);
+
+            // If this was a refinement, update chat
+            if (isProcessingChat) {
+                isProcessingChat = false;
+                addAIMessage("✅ Your skill has been refined! Check the updated template above.");
+            }
         }
     } catch (error) {
         stopStatusPolling();
-        setLoading(false);
+        hideProcessStream();
         disableButtons(false);
         showError(error.message);
     }
@@ -257,11 +295,32 @@ function stopLogStream() {
 }
 
 function appendLogEntry(entry) {
+    // Add to legacy log output for compatibility
     const logOutput = document.getElementById('logOutput');
-    if (!logOutput) return;
-    const timestamp = entry.timestamp ? `[${entry.timestamp}] ` : '';
-    logOutput.textContent += `${timestamp}${entry.message}\n`;
-    logOutput.scrollTop = logOutput.scrollHeight;
+    if (logOutput) {
+        const timestamp = entry.timestamp ? `[${entry.timestamp}] ` : '';
+        logOutput.textContent += `${timestamp}${entry.message}\n`;
+        logOutput.scrollTop = logOutput.scrollHeight;
+    }
+
+    // Add to process stream if it's visible
+    if (processStream && processStream.style.display !== 'none') {
+        // Determine log level from message content
+        let level = 'info';
+        const message = entry.message.toLowerCase();
+
+        if (message.includes('error') || message.includes('failed') || message.includes('exception')) {
+            level = 'error';
+        } else if (message.includes('success') || message.includes('completed') || message.includes('finished')) {
+            level = 'success';
+        } else if (message.includes('warning') || message.includes('deprecated')) {
+            level = 'warning';
+        } else if (message.includes('stage') || message.includes('starting') || message.includes('beginning')) {
+            level = 'stage';
+        }
+
+        addLogEntry(entry.message, level, entry.timestamp);
+    }
 }
 
 function clearLogOutput() {
@@ -289,27 +348,14 @@ function openPreview() {
     }
 }
 
-async function exportTemplate() {
+function exportSkill() {
     if (!currentTimestamp) return;
+    window.open(`/api/template/${currentTimestamp}/export?type=skill`, '_blank');
+}
 
-    try {
-        const response = await fetch(`/api/template/${currentTimestamp}/export`);
-        if (!response.ok) throw new Error('Export failed');
-
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `skill_template_${currentTimestamp}.zip`;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-
-        showSuccess('Template exported successfully!');
-    } catch (error) {
-        showError(error.message);
-    }
+function exportBundle() {
+    if (!currentTimestamp) return;
+    window.open(`/api/template/${currentTimestamp}/export?type=bundle`, '_blank');
 }
 
 async function loadTemplates() {
@@ -341,24 +387,12 @@ function renderTemplates(templates) {
             </div>
             <div class="actions">
                 <a href="/preview/${template.timestamp}" class="btn btn-small btn-outline">Preview</a>
-                <a href="/api/template/${template.timestamp}/export" class="btn btn-small btn-outline" target="_blank">Export</a>
+                <a href="/api/template/${template.timestamp}/export?type=bundle" class="btn btn-small btn-outline" target="_blank">Export Bundle</a>
             </div>
         </div>
     `).join('');
 }
 
-function setLoading(message) {
-    if (message) {
-        loadingText.textContent = message;
-        loadingModal.style.display = 'flex';
-        statusEl.classList.add('processing');
-        statusText.textContent = message;
-    } else {
-        loadingModal.style.display = 'none';
-        statusEl.classList.remove('processing');
-        statusText.textContent = 'Ready';
-    }
-}
 
 function showError(message) {
     errorMessage.textContent = message;
@@ -412,6 +446,185 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
+
+// Process Stream Functions
+function showProcessStream() {
+    if (processStream) {
+        processStream.style.display = 'block';
+        processStream.classList.add('active');
+    }
+}
+
+function hideProcessStream() {
+    if (processStream) {
+        processStream.classList.remove('active');
+        processStream.style.display = 'none';
+    }
+}
+
+function updateStage(stageText, progress) {
+    if (currentStageEl) {
+        currentStageEl.textContent = stageText;
+    }
+    if (progress !== undefined) {
+        updateProgress(progress);
+    }
+}
+
+function updateStageFromPipeline(stage) {
+    const stageMap = {
+        'research': { text: '📚 Researching Domain Knowledge', progress: 33 },
+        'analysis': { text: '🔍 Analyzing Patterns & Opportunities', progress: 66 },
+        'template': { text: '🛠️ Generating Skill Template', progress: 100 }
+    };
+
+    const stageInfo = stageMap[stage] || { text: 'Processing...', progress: 0 };
+    updateStage(stageInfo.text, stageInfo.progress);
+}
+
+function updateProgress(percentage) {
+    if (progressFill) {
+        progressFill.style.width = `${percentage}%`;
+    }
+}
+
+function addLogEntry(message, level = 'info', timestamp = null) {
+    if (!logStream) return;
+
+    const logEntry = document.createElement('div');
+    logEntry.className = `log-entry ${level}`;
+
+    const timestampEl = document.createElement('span');
+    timestampEl.className = 'log-timestamp';
+    timestampEl.textContent = timestamp || new Date().toLocaleTimeString();
+
+    const messageEl = document.createElement('span');
+    messageEl.textContent = message;
+
+    logEntry.appendChild(timestampEl);
+    logEntry.appendChild(messageEl);
+
+    logStream.appendChild(logEntry);
+
+    // Scroll to bottom
+    logStream.parentElement.scrollTop = logStream.parentElement.scrollHeight;
+
+    // Trigger animation
+    requestAnimationFrame(() => {
+        logEntry.classList.add('visible');
+    });
+}
+
+function clearProcessLog() {
+    if (logStream) {
+        logStream.innerHTML = '';
+    }
+}
+
+// Remove the old setLoading function since we're not using modal
+function setLoading(message) {
+    if (message) {
+        statusEl.classList.add('processing');
+        statusText.textContent = message;
+        // Update stage if process stream is visible
+        if (processStream && processStream.style.display !== 'none') {
+            updateStage(message);
+        }
+    } else {
+        statusEl.classList.remove('processing');
+        statusText.textContent = 'Ready';
+    }
+}
+
+// Chat Refinement Functions
+let chatHistory = [];
+let isProcessingChat = false;
+
+// Show chat interface after pipeline completes
+function showChatInterface() {
+    const chatRefinement = document.getElementById('chatRefinement');
+    if (chatRefinement) {
+        chatRefinement.style.display = 'block';
+        addAIMessage("Your skill is ready! 🎉 You can chat with me to refine it further. What would you like to change or add?");
+    }
+}
+
+// Add user message to chat
+function addUserMessage(message) {
+    const chatMessages = document.getElementById('chatMessages');
+    const messageEl = document.createElement('div');
+    messageEl.className = 'chat-message user';
+    messageEl.innerHTML = `<div class="chat-bubble">${escapeHtml(message)}</div>`;
+    chatMessages.appendChild(messageEl);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// Add AI message to chat
+function addAIMessage(message) {
+    const chatMessages = document.getElementById('chatMessages');
+    const messageEl = document.createElement('div');
+    messageEl.className = 'chat-message ai';
+    messageEl.innerHTML = `<div class="chat-bubble">${escapeHtml(message)}</div>`;
+    chatMessages.appendChild(messageEl);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// Send chat message for refinement
+async function sendChatMessage() {
+    const chatInput = document.getElementById('chatInput');
+    const message = chatInput.value.trim();
+
+    if (!message || isProcessingChat) return;
+
+    addUserMessage(message);
+    chatInput.value = '';
+    isProcessingChat = true;
+
+    addAIMessage("🔄 Working on your request...");
+
+    try {
+        const response = await fetch('/api/pipeline/refine', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                session_id: currentSessionId,
+                message: message
+            })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || 'Refinement failed');
+        }
+
+        // Show process stream for refinement
+        showProcessStream();
+        startLogStream();
+
+    } catch (error) {
+        addAIMessage(`❌ Sorry, something went wrong: ${error.message}`);
+        isProcessingChat = false;
+    }
+}
+
+// Chat send button handler
+document.getElementById('chatSendBtn').addEventListener('click', sendChatMessage);
+
+// Enter to send (Shift+Enter for new line)
+document.getElementById('chatInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendChatMessage();
+    }
+});
+
+// Refine button handler
+document.getElementById('refineBtn').addEventListener('click', () => {
+    const chatRefinement = document.getElementById('chatRefinement');
+    chatRefinement.scrollIntoView({ behavior: 'smooth' });
+    document.getElementById('chatInput').focus();
+});
 
 // Initialize
 loadTemplates();

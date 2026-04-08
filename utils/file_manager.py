@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Union, TYPE_CHECKING, Any
 from pathlib import Path
 
 from config import Config
+from utils.skill_bundle import normalize_skill_content, detect_referenced_files, ensure_bundle_structure, build_tree
 
 # Use TYPE_CHECKING to avoid circular import
 if TYPE_CHECKING:
@@ -233,10 +234,33 @@ class FileManager:
         run_dir = os.path.join(Config.SKILLS_OUTPUT_DIR, state.timestamp)
         os.makedirs(run_dir, exist_ok=True)
 
-        # Save skill template
-        skill_file = os.path.join(run_dir, "skill.md")
+        # Normalize skill content and determine bundle name
+        normalized_content, skill_name, warnings = normalize_skill_content(
+            state.template_output,
+            state.query
+        )
+        state.template_output = normalized_content
+        state.skill_name = skill_name
+
+        bundle_dir = os.path.join(run_dir, skill_name)
+        os.makedirs(bundle_dir, exist_ok=True)
+        state.bundle_root = bundle_dir
+
+        # Save skill template into bundle
+        skill_file = os.path.join(bundle_dir, "SKILL.md")
         with open(skill_file, 'w', encoding='utf-8') as f:
             f.write(state.template_output)
+
+        # Keep legacy copy for older tooling
+        legacy_skill_file = os.path.join(run_dir, "skill.md")
+        with open(legacy_skill_file, 'w', encoding='utf-8') as f:
+            f.write(state.template_output)
+
+        referenced_files = detect_referenced_files(state.template_output)
+        created_assets = ensure_bundle_structure(bundle_dir, referenced_files)
+
+        bundle_tree = build_tree(bundle_dir, skill_name)
+        state.bundle_tree = bundle_tree
 
         # Save metadata
         metadata = {
@@ -244,6 +268,11 @@ class FileManager:
             'timestamp': state.timestamp,
             'iteration_count': state.iteration_count,
             'created_at': datetime.now().isoformat(),
+            'skill_name': skill_name,
+            'bundle_dir': skill_name,
+            'bundle_tree': bundle_tree,
+            'bundle_assets': created_assets,
+            'bundle_warnings': warnings,
             'models_used': {
                 'research': Config.RESEARCH_MODEL,
                 'analysis': Config.ANALYSIS_MODEL,
@@ -299,30 +328,72 @@ class FileManager:
     @staticmethod
     def load_skill_template(timestamp: str) -> Optional[str]:
         """Load the skill template for a given timestamp"""
-        skill_file = os.path.join(
+        metadata = FileManager.load_pipeline_state(timestamp)
+        if metadata and metadata.get('skill_name'):
+            skill_file = os.path.join(
+                Config.SKILLS_OUTPUT_DIR,
+                timestamp,
+                metadata['skill_name'],
+                "SKILL.md"
+            )
+            if os.path.exists(skill_file):
+                with open(skill_file, 'r', encoding='utf-8') as f:
+                    return f.read()
+
+        legacy_file = os.path.join(
             Config.SKILLS_OUTPUT_DIR,
             timestamp,
             "skill.md"
         )
-
-        if not os.path.exists(skill_file):
-            return None
-
-        with open(skill_file, 'r', encoding='utf-8') as f:
-            return f.read()
+        if os.path.exists(legacy_file):
+            with open(legacy_file, 'r', encoding='utf-8') as f:
+                return f.read()
+        return None
 
     @staticmethod
     def save_edited_template(timestamp: str, content: str) -> bool:
         """Save an edited template"""
-        skill_file = os.path.join(
-            Config.SKILLS_OUTPUT_DIR,
-            timestamp,
-            "skill.md"
+        metadata = FileManager.load_pipeline_state(timestamp) or {}
+        normalized_content, skill_name, warnings = normalize_skill_content(
+            content,
+            metadata.get('query', 'skill')
         )
+
+        run_dir = os.path.join(Config.SKILLS_OUTPUT_DIR, timestamp)
+        bundle_dir = os.path.join(run_dir, skill_name)
+
+        if metadata.get('skill_name') and metadata['skill_name'] != skill_name:
+            old_dir = os.path.join(run_dir, metadata['skill_name'])
+            if os.path.exists(old_dir):
+                os.rename(old_dir, bundle_dir)
+
+        os.makedirs(bundle_dir, exist_ok=True)
+
+        skill_file = os.path.join(bundle_dir, "SKILL.md")
 
         try:
             with open(skill_file, 'w', encoding='utf-8') as f:
-                f.write(content)
+                f.write(normalized_content)
+
+            legacy_skill_file = os.path.join(run_dir, "skill.md")
+            with open(legacy_skill_file, 'w', encoding='utf-8') as f:
+                f.write(normalized_content)
+
+            referenced_files = detect_referenced_files(normalized_content)
+            created_assets = ensure_bundle_structure(bundle_dir, referenced_files)
+            bundle_tree = build_tree(bundle_dir, skill_name)
+
+            metadata.update({
+                'skill_name': skill_name,
+                'bundle_dir': skill_name,
+                'bundle_tree': bundle_tree,
+                'bundle_assets': created_assets,
+                'bundle_warnings': warnings
+            })
+
+            metadata_file = os.path.join(run_dir, "metadata.json")
+            with open(metadata_file, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=2, ensure_ascii=False)
             return True
         except:
             return False
